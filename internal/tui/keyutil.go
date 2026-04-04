@@ -8,7 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-var stopKey = key.NewBinding(key.WithKeys("escape"), key.WithHelp("esc", "stop"))
+var stopKey = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop"))
 
 func matchCtrlLetter(msg tea.KeyPressMsg, letter rune) bool {
 	key := msg.Key()

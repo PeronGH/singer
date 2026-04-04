@@ -265,7 +265,7 @@ func (a *App) handleBrowserAction(action browserAction) tea.Cmd {
 		a.err = nil
 		a.mode = modePrompt
 		a.prompt.remoteName = ""
-		return a.prompt.start(promptFlowRemoteName, "Remote name: ", "")
+		return a.prompt.start(promptFlowRemoteName, "Remote name (esc cancels): ", "")
 	case browserActionRefreshRemote:
 		g := a.findGroup(action.GroupName)
 		if g == nil || !g.data.IsRemote() {
@@ -297,12 +297,12 @@ func (a *App) handleBrowserAction(action browserAction) tea.Cmd {
 		a.err = nil
 		a.mode = modePrompt
 		a.editingNodeIndex = -1
-		return a.prompt.start(promptFlowAddLocalNode, "Local node URI: ", "")
+		return a.prompt.start(promptFlowAddLocalNode, "Local node URI (esc cancels): ", "")
 	case browserActionEditLocalNode:
 		a.err = nil
 		a.mode = modePrompt
 		a.editingNodeIndex = action.NodeIndex
-		return a.prompt.start(promptFlowEditLocalNode, "Edit local node URI: ", action.NodeURI)
+		return a.prompt.start(promptFlowEditLocalNode, "Edit local node URI (esc cancels): ", action.NodeURI)
 	case browserActionDeleteLocalNode:
 		return a.deleteLocalNode(action.NodeIndex)
 	default:
@@ -336,7 +336,7 @@ func (a *App) handlePromptAction(action promptAction) tea.Cmd {
 			a.err = nil
 			a.mode = modePrompt
 			a.prompt.remoteName = value
-			return a.prompt.start(promptFlowRemoteURL, "Remote URL: ", "")
+			return a.prompt.start(promptFlowRemoteURL, "Remote URL (esc cancels): ", "")
 		case promptFlowRemoteURL:
 			name := a.prompt.remoteName
 			a.mode = modeBrowsing

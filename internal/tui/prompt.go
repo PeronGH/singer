@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 )
@@ -68,7 +69,8 @@ func (p *promptModel) update(msg tea.Msg) (promptAction, tea.Cmd) {
 				Kind:  promptActionConfirm,
 				Value: p.input.Value(),
 			}, nil
-		case "escape":
+		}
+		if key.Matches(msg, stopKey) {
 			return promptAction{Kind: promptActionCancel}, nil
 		}
 	}
