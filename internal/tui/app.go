@@ -32,6 +32,7 @@ type App struct {
 	prompt  promptModel
 	runner  runnerModel
 
+	helpVisible      bool
 	mode             appMode
 	width, height    int
 	editingNodeIndex int
@@ -73,12 +74,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return a, tea.Quit
 		}
+		if matchPrintable(msg, '?') {
+			a.helpVisible = !a.helpVisible
+			return a, nil
+		}
+		if a.helpVisible && key.Matches(msg, stopKey) {
+			a.helpVisible = false
+			return a, nil
+		}
 	case logLineMsg:
 		return a, a.runner.appendLine(string(msg))
 	case runnerDoneMsg:
 		return a, a.handleRunnerDone(msg)
 	case fetchDoneMsg:
 		return a, a.handleFetchDone(msg)
+	}
+
+	if a.helpVisible {
+		return a, nil
 	}
 
 	switch a.mode {
@@ -102,6 +115,16 @@ func (a *App) View() tea.View {
 		v := tea.NewView("")
 		v.AltScreen = true
 		return v
+	}
+
+	if a.helpVisible {
+		sections := []string{
+			a.helpScreenView(),
+			helpBar.Width(a.width).Render(a.helpFooterText()),
+		}
+		view := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, sections...))
+		view.AltScreen = true
+		return view
 	}
 
 	sections := make([]string, 0, 4)
@@ -136,7 +159,7 @@ func (a *App) resizeChildren() {
 }
 
 func (a *App) listHeight() int {
-	h := a.height
+	h := a.height - helpBarH
 	if a.err != nil {
 		h--
 	}
@@ -156,28 +179,80 @@ func (a *App) logPaneHeight() int {
 func (a *App) helpText() string {
 	switch a.mode {
 	case modePrompt:
-		return "enter: confirm · esc: cancel"
+		return "enter: confirm · esc: cancel · ?: help"
 	case modeRunning:
-		return "esc/ctrl+c: stop · arrows/pgup/pgdn: scroll logs"
+		return "esc: stop · ?: help"
 	default:
-		g := a.browser.activeGroupData()
-		parts := []string{
-			"↑↓: navigate",
-			"/: filter",
-			"tab/shift+tab: switch group",
-			"enter: connect",
-			"n: new remote",
-			"R: refresh all",
-		}
-		if g != nil && g.IsLocal() {
-			parts = append(parts, "a: add", "e: edit", "d: delete")
-		}
-		if g != nil && g.IsRemote() {
-			parts = append(parts, "r: refresh", "D: delete")
-		}
-		parts = append(parts, "q: quit")
-		return strings.Join(parts, " · ")
+		return "q: quit · ?: help"
 	}
+}
+
+func (a *App) helpFooterText() string {
+	return "?: close help · esc: close help · ctrl+c: quit"
+}
+
+func (a *App) helpScreenView() string {
+	lines := []string{
+		helpTitle.Render("Singer Help"),
+		"",
+		helpSection.Render("Global"),
+		"ctrl+c  Quit the app, or stop sing-box while it is running",
+		"?       Open or close this help screen",
+		"",
+	}
+
+	switch a.mode {
+	case modePrompt:
+		lines = append(lines,
+			helpSection.Render("Prompt"),
+			"enter   Confirm the current input",
+			"esc     Cancel and return to browsing",
+		)
+	case modeRunning:
+		lines = append(lines,
+			helpSection.Render("Runner"),
+			"esc     Stop sing-box",
+			"↑/↓     Scroll logs line by line",
+			"pgup    Scroll one page up",
+			"pgdn    Scroll one page down",
+		)
+	default:
+		lines = append(lines,
+			helpSection.Render("Browse"),
+			"↑/↓              Move through nodes",
+			"/                Start filtering",
+			"tab/shift+tab    Switch groups",
+			"enter            Connect selected node",
+			"n                Add a new remote group",
+			"R                Refresh all remote groups",
+			"q                Quit",
+		)
+
+		if g := a.browser.activeGroupData(); g != nil {
+			switch {
+			case g.IsLocal():
+				lines = append(lines,
+					"",
+					helpSection.Render("Local Group"),
+					"a   Add a node",
+					"e   Edit the selected node",
+					"d   Delete the selected node",
+				)
+			case g.IsRemote():
+				lines = append(lines,
+					"",
+					helpSection.Render("Remote Group"),
+					"r   Refresh the selected remote group",
+					"D   Delete the selected remote group",
+				)
+			}
+		}
+	}
+
+	return helpScreen.
+		Width(a.width).
+		Height(max(a.height-helpBarH, 1)).
+		Render(strings.Join(lines, "\n"))
 }
 
 func (a *App) handleBrowserAction(action browserAction) tea.Cmd {

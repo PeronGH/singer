@@ -106,13 +106,60 @@ func TestHelpTextMatchesMode(t *testing.T) {
 		mode:    modePrompt,
 		browser: newBrowser([]store.Group{{Name: "local", Kind: store.GroupKindLocal}}, 80, 20),
 	}
-	if got := app.helpText(); got != "enter: confirm · esc: cancel" {
+	if got := app.helpText(); got != "enter: confirm · esc: cancel · ?: help" {
 		t.Fatalf("prompt help = %q", got)
 	}
 
 	app.mode = modeRunning
-	if got := app.helpText(); got != "esc/ctrl+c: stop · arrows/pgup/pgdn: scroll logs" {
+	if got := app.helpText(); got != "esc: stop · ?: help" {
 		t.Fatalf("running help = %q", got)
+	}
+
+	app.mode = modeBrowsing
+	if got := app.helpText(); got != "q: quit · ?: help" {
+		t.Fatalf("browse help = %q", got)
+	}
+}
+
+func TestListHeightReservesHelpBar(t *testing.T) {
+	app := &App{
+		height: 20,
+	}
+
+	if got := app.listHeight(); got != 19 {
+		t.Fatalf("list height = %d, want 19", got)
+	}
+}
+
+func TestQuestionMarkTogglesHelpScreen(t *testing.T) {
+	app := &App{
+		browser: newBrowser([]store.Group{{Name: "local", Kind: store.GroupKindLocal}}, 80, 20),
+	}
+
+	if _, _ = app.Update(keyPress(tea.Key{Text: "?", Code: '?'})); !app.helpVisible {
+		t.Fatal("help screen should open")
+	}
+
+	if _, _ = app.Update(keyPress(tea.Key{Text: "?", Code: '?'})); app.helpVisible {
+		t.Fatal("help screen should close")
+	}
+}
+
+func TestHelpScreenInterceptsQuitKey(t *testing.T) {
+	app := &App{
+		helpVisible: true,
+		browser:     newBrowser([]store.Group{{Name: "local", Kind: store.GroupKindLocal}}, 80, 20),
+	}
+
+	model, cmd := app.Update(keyPress(tea.Key{Text: "q", Code: 'q'}))
+	if model == nil {
+		t.Fatal("expected model to be returned")
+	}
+	if cmd != nil {
+		t.Fatal("help screen should swallow q instead of quitting")
+	}
+	if !app.helpVisible {
+		t.Fatal("help screen should remain visible")
 	}
 }
 

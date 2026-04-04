@@ -29,6 +29,20 @@ func matchLetter(msg tea.KeyPressMsg, letter rune) bool {
 	return keyMatchesRune(key, letter)
 }
 
+func matchPrintable(msg tea.KeyPressMsg, r rune) bool {
+	key := msg.Key()
+	mods := key.Mod &^ (tea.ModShift | tea.ModCapsLock | tea.ModNumLock | tea.ModScrollLock)
+	if mods != 0 {
+		return false
+	}
+
+	want := string(r)
+	if text := strings.TrimSpace(key.Text); text == want {
+		return true
+	}
+	return key.Code == r
+}
+
 func keyMatchesRune(key tea.Key, letter rune) bool {
 	want := unicode.ToLower(letter)
 
