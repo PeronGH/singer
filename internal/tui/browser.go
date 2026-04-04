@@ -148,14 +148,14 @@ func (b *browserModel) update(msg tea.Msg) (browserAction, tea.Cmd) {
 	}
 
 	if msg, ok := msg.(tea.KeyPressMsg); ok {
-		switch msg.String() {
-		case "tab":
+		switch {
+		case key.Matches(msg, groupNextKey):
 			b.cycleTab(1)
 			return browserAction{}, nil
-		case "shift+tab":
+		case key.Matches(msg, groupPrevKey):
 			b.cycleTab(-1)
 			return browserAction{}, nil
-		case "enter":
+		case key.Matches(msg, connectKey):
 			idx, ok := b.selectedNodeIndex(g)
 			if !ok {
 				return browserAction{}, nil
@@ -165,55 +165,45 @@ func (b *browserModel) update(msg tea.Msg) (browserAction, tea.Cmd) {
 				GroupName: g.data.Name,
 				NodeIndex: idx,
 			}, nil
-		case "n":
+		case matchLetter(msg, 'n'):
 			return browserAction{Kind: browserActionAddRemote}, nil
-		case "R":
+		case key.Matches(msg, refreshAllKey):
 			return browserAction{Kind: browserActionRefreshAll}, nil
-		case "q":
+		case matchLetter(msg, 'q'):
 			return browserAction{Kind: browserActionQuit}, nil
-		case "a":
-			if g.data.IsLocal() {
-				return browserAction{Kind: browserActionAddLocalNode}, nil
+		case matchLetter(msg, 'a') && g.data.IsLocal():
+			return browserAction{Kind: browserActionAddLocalNode}, nil
+		case matchLetter(msg, 'e') && g.data.IsLocal():
+			idx, ok := b.selectedNodeIndex(g)
+			if !ok {
+				return browserAction{}, nil
 			}
-		case "e":
-			if g.data.IsLocal() {
-				idx, ok := b.selectedNodeIndex(g)
-				if !ok {
-					return browserAction{}, nil
-				}
-				return browserAction{
-					Kind:      browserActionEditLocalNode,
-					GroupName: g.data.Name,
-					NodeIndex: idx,
-					NodeURI:   g.data.Nodes[idx],
-				}, nil
+			return browserAction{
+				Kind:      browserActionEditLocalNode,
+				GroupName: g.data.Name,
+				NodeIndex: idx,
+				NodeURI:   g.data.Nodes[idx],
+			}, nil
+		case matchLetter(msg, 'd') && g.data.IsLocal():
+			idx, ok := b.selectedNodeIndex(g)
+			if !ok {
+				return browserAction{}, nil
 			}
-		case "d":
-			if g.data.IsLocal() {
-				idx, ok := b.selectedNodeIndex(g)
-				if !ok {
-					return browserAction{}, nil
-				}
-				return browserAction{
-					Kind:      browserActionDeleteLocalNode,
-					GroupName: g.data.Name,
-					NodeIndex: idx,
-				}, nil
-			}
-		case "r":
-			if g.data.IsRemote() {
-				return browserAction{
-					Kind:      browserActionRefreshRemote,
-					GroupName: g.data.Name,
-				}, nil
-			}
-		case "D":
-			if g.data.IsRemote() {
-				return browserAction{
-					Kind:      browserActionDeleteRemote,
-					GroupName: g.data.Name,
-				}, nil
-			}
+			return browserAction{
+				Kind:      browserActionDeleteLocalNode,
+				GroupName: g.data.Name,
+				NodeIndex: idx,
+			}, nil
+		case matchLetter(msg, 'r') && g.data.IsRemote():
+			return browserAction{
+				Kind:      browserActionRefreshRemote,
+				GroupName: g.data.Name,
+			}, nil
+		case key.Matches(msg, deleteRemoteKey) && g.data.IsRemote():
+			return browserAction{
+				Kind:      browserActionDeleteRemote,
+				GroupName: g.data.Name,
+			}, nil
 		}
 	}
 

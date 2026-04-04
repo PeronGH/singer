@@ -51,6 +51,24 @@ func TestBrowserDoesNotFireAppShortcutsWhileFiltering(t *testing.T) {
 	}
 }
 
+func TestBrowserAcceptsUppercasePrintableShortcuts(t *testing.T) {
+	browser := newBrowser([]store.Group{{
+		Name:  "local",
+		Kind:  store.GroupKindLocal,
+		Nodes: []string{"socks://10.0.0.1:1080#alpha"},
+	}}, 80, 20)
+
+	action, _ := browser.update(keyPress(tea.Key{Text: "N", Code: 'N'}))
+	if action.Kind != browserActionAddRemote {
+		t.Fatalf("action kind = %v, want add remote", action.Kind)
+	}
+
+	action, _ = browser.update(keyPress(tea.Key{Text: "Q", Code: 'Q'}))
+	if action.Kind != browserActionQuit {
+		t.Fatalf("action kind = %v, want quit", action.Kind)
+	}
+}
+
 func TestPromptPasteUsesTextInputBehavior(t *testing.T) {
 	prompt := newPrompt(40)
 	if cmd := prompt.start(promptFlowAddLocalNode, "Local node URI: ", "ab"); cmd == nil {
@@ -80,6 +98,21 @@ func TestRunnerFinishSuppressesIntentionalStopErrors(t *testing.T) {
 	}
 	if runner.stopping {
 		t.Fatal("runner stopping flag should be cleared")
+	}
+}
+
+func TestHelpTextMatchesMode(t *testing.T) {
+	app := &App{
+		mode:    modePrompt,
+		browser: newBrowser([]store.Group{{Name: "local", Kind: store.GroupKindLocal}}, 80, 20),
+	}
+	if got := app.helpText(); got != "enter: confirm · esc: cancel" {
+		t.Fatalf("prompt help = %q", got)
+	}
+
+	app.mode = modeRunning
+	if got := app.helpText(); got != "esc/ctrl+c: stop · arrows/pgup/pgdn: scroll logs" {
+		t.Fatalf("running help = %q", got)
 	}
 }
 

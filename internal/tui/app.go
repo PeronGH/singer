@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/PeronGH/singer/internal/store"
@@ -20,6 +21,8 @@ const (
 	modePrompt
 	modeRunning
 )
+
+const helpBarH = 1
 
 type App struct {
 	store  *store.Store
@@ -63,7 +66,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.resizeChildren()
 		return a, nil
 	case tea.KeyPressMsg:
-		if msg.String() == "ctrl+c" {
+		if matchCtrlLetter(msg, 'c') {
 			if a.mode == modeRunning {
 				a.runner.stop()
 				return a, nil
@@ -83,7 +86,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		action, cmd := a.prompt.update(msg)
 		return a, tea.Batch(cmd, a.handlePromptAction(action))
 	case modeRunning:
-		if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "escape" {
+		if msg, ok := msg.(tea.KeyPressMsg); ok && key.Matches(msg, stopKey) {
 			a.runner.stop()
 			return a, nil
 		}
@@ -119,6 +122,8 @@ func (a *App) View() tea.View {
 		sections = append(sections, a.runner.logView.View())
 	}
 
+	sections = append(sections, helpBar.Width(a.width).Render(a.helpText()))
+
 	view := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, sections...))
 	view.AltScreen = true
 	return view
@@ -146,6 +151,33 @@ func (a *App) listHeight() int {
 
 func (a *App) logPaneHeight() int {
 	return max(a.height/3, 5)
+}
+
+func (a *App) helpText() string {
+	switch a.mode {
+	case modePrompt:
+		return "enter: confirm · esc: cancel"
+	case modeRunning:
+		return "esc/ctrl+c: stop · arrows/pgup/pgdn: scroll logs"
+	default:
+		g := a.browser.activeGroupData()
+		parts := []string{
+			"↑↓: navigate",
+			"/: filter",
+			"tab/shift+tab: switch group",
+			"enter: connect",
+			"n: new remote",
+			"R: refresh all",
+		}
+		if g != nil && g.IsLocal() {
+			parts = append(parts, "a: add", "e: edit", "d: delete")
+		}
+		if g != nil && g.IsRemote() {
+			parts = append(parts, "r: refresh", "D: delete")
+		}
+		parts = append(parts, "q: quit")
+		return strings.Join(parts, " · ")
+	}
 }
 
 func (a *App) handleBrowserAction(action browserAction) tea.Cmd {

@@ -51,7 +51,7 @@ func newGroup(g store.Group, width, height int) group {
 
 	l := list.New(items, list.NewDefaultDelegate(), width, height)
 	l.Title = titleForGroup(g)
-	l.SetShowHelp(true)
+	l.SetShowHelp(false)
 	l.SetShowStatusBar(false)
 	l.DisableQuitKeybindings()
 
