@@ -319,6 +319,19 @@ func TestParseHysteria2MissingPassword(t *testing.T) {
 	}
 }
 
+func TestParseNoTag(t *testing.T) {
+	outbounds, err := Parse(strings.NewReader("socks://10.0.0.1:1080\nhttp://10.0.0.2:8080\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outbounds[0].Tag != "0" {
+		t.Fatalf("[0] tag = %q, want \"0\"", outbounds[0].Tag)
+	}
+	if outbounds[1].Tag != "1" {
+		t.Fatalf("[1] tag = %q, want \"1\"", outbounds[1].Tag)
+	}
+}
+
 func TestConfig(t *testing.T) {
 	outbounds, err := Parse(strings.NewReader("socks://10.0.0.1:1080#my-socks\nhttp://10.0.0.2:8080#my-http\n"))
 	if err != nil {

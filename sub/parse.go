@@ -65,6 +65,9 @@ func Parse(r io.Reader) ([]option.Outbound, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parsing %q: %w", line, err)
 		}
+		if ob.Tag == "" {
+			ob.Tag = strconv.Itoa(len(outbounds))
+		}
 		outbounds = append(outbounds, ob)
 	}
 	return outbounds, nil

@@ -85,9 +85,9 @@ func delegateUpdate(msg tea.Msg, m *list.Model) tea.Cmd {
 
 	switch km.String() {
 	case "enter":
-		if item := m.SelectedItem(); item != nil {
-			uri := item.(nodeItem).uri
-			return func() tea.Msg { return connectMsg{nodeURI: uri} }
+		if m.SelectedItem() != nil {
+			idx := m.Index()
+			return func() tea.Msg { return connectMsg{index: idx} }
 		}
 	case "a":
 		return func() tea.Msg { return addNodeMsg{} }

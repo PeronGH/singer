@@ -2,7 +2,7 @@ package tui
 
 // Node-level action messages (bubbled up from group delegate).
 type (
-	connectMsg    struct{ nodeURI string }
+	connectMsg    struct{ index int }
 	addNodeMsg    struct{}
 	editNodeMsg   struct{ nodeURI string }
 	deleteNodeMsg struct{ index int }

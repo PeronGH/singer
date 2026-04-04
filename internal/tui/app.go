@@ -223,9 +223,11 @@ func (a *App) handleConnect(msg connectMsg) tea.Cmd {
 		return nil
 	}
 
-	// Find the tag for the selected node.
-	tag := extractTag(msg.nodeURI)
-	cfg, err := sub.Config(outbounds, tag)
+	if msg.index >= len(outbounds) {
+		return nil
+	}
+
+	cfg, err := sub.Config(outbounds, outbounds[msg.index].Tag)
 	if err != nil {
 		a.err = err
 		return nil
