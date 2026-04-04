@@ -46,6 +46,7 @@ type App struct {
 	mode             appMode
 	width, height    int
 	editingNodeIndex int
+	pendingRun       []byte
 	err              error
 }
 
@@ -382,11 +383,6 @@ func (a *App) handleConnect(groupName string, nodeIndex int) tea.Cmd {
 	if g == nil {
 		return nil
 	}
-	if a.runner.active {
-		a.activeTab = tabLogs
-		a.err = fmt.Errorf("sing-box is already running")
-		return nil
-	}
 
 	_, outbounds, err := sub.ParseBody([]byte(strings.Join(g.data.Nodes, "\n")))
 	if err != nil {
@@ -411,7 +407,13 @@ func (a *App) handleConnect(groupName string, nodeIndex int) tea.Cmd {
 
 	a.err = nil
 	a.activeTab = tabLogs
-	a.resizeChildren()
+	if a.runner.active {
+		a.pendingRun = configJSON
+		if !a.runner.stopping {
+			a.runner.stop()
+		}
+		return nil
+	}
 	return a.runner.start(configJSON)
 }
 
@@ -438,6 +440,15 @@ func (a *App) handleRunnerDone(msg runnerDoneMsg) tea.Cmd {
 		a.err = nil
 	}
 	a.resizeChildren()
+
+	if a.pendingRun != nil {
+		configJSON := a.pendingRun
+		a.pendingRun = nil
+		a.err = nil
+		a.activeTab = tabLogs
+		return a.runner.start(configJSON)
+	}
+
 	return nil
 }
 

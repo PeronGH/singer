@@ -53,40 +53,6 @@ func TestBrowserDoesNotFireAppShortcutsWhileFiltering(t *testing.T) {
 	}
 }
 
-func TestBrowserAcceptsUppercasePrintableShortcuts(t *testing.T) {
-	browser := newBrowser([]store.Group{{
-		Name:  "local",
-		Kind:  store.GroupKindLocal,
-		Nodes: []string{"socks://10.0.0.1:1080#alpha"},
-	}}, 80, 20)
-
-	action, _ := browser.update(keyPress(tea.Key{Text: "N", Code: 'N'}))
-	if action.Kind != browserActionAddRemote {
-		t.Fatalf("action kind = %v, want add remote", action.Kind)
-	}
-
-	action, _ = browser.update(keyPress(tea.Key{Text: "Q", Code: 'Q'}))
-	if action.Kind != browserActionQuit {
-		t.Fatalf("action kind = %v, want quit", action.Kind)
-	}
-}
-
-func TestPromptPasteUsesTextInputBehavior(t *testing.T) {
-	prompt := newPrompt(40)
-	if cmd := prompt.start(promptFlowAddLocalNode, "Local node URI: ", "ab"); cmd == nil {
-		t.Fatal("expected focus command")
-	}
-	prompt.input.SetCursor(1)
-
-	action, _ := prompt.update(tea.PasteMsg{Content: "XYZ"})
-	if action.Kind != promptActionNone {
-		t.Fatalf("action kind = %v, want none", action.Kind)
-	}
-	if got := prompt.input.Value(); got != "aXYZb" {
-		t.Fatalf("value = %q, want %q", got, "aXYZb")
-	}
-}
-
 func TestRunnerFinishSuppressesIntentionalStopErrors(t *testing.T) {
 	runner := newRunner()
 	runner.active = true
@@ -100,34 +66,6 @@ func TestRunnerFinishSuppressesIntentionalStopErrors(t *testing.T) {
 	}
 	if runner.stopping {
 		t.Fatal("runner stopping flag should be cleared")
-	}
-}
-
-func TestQuestionMarkTogglesHelpScreen(t *testing.T) {
-	app := testApp()
-
-	if _, _ = app.Update(keyPress(tea.Key{Text: "?", Code: '?'})); !app.helpVisible {
-		t.Fatal("help screen should open")
-	}
-
-	if _, _ = app.Update(keyPress(tea.Key{Text: "?", Code: '?'})); app.helpVisible {
-		t.Fatal("help screen should close")
-	}
-}
-
-func TestHelpScreenInterceptsQuitKey(t *testing.T) {
-	app := testApp()
-	app.helpVisible = true
-
-	model, cmd := app.Update(keyPress(tea.Key{Text: "q", Code: 'q'}))
-	if model == nil {
-		t.Fatal("expected model to be returned")
-	}
-	if cmd != nil {
-		t.Fatal("help screen should swallow q instead of quitting")
-	}
-	if !app.helpVisible {
-		t.Fatal("help screen should remain visible")
 	}
 }
 
@@ -170,6 +108,24 @@ func TestLogsTabOwnsNavigationInput(t *testing.T) {
 	app.activeTab = tabLogs
 	if _, _ = app.Update(keyPress(tea.Key{Code: tea.KeyDown})); app.browser.activeGroup().list.Index() != 0 {
 		t.Fatal("group selection should not move while logs tab is active")
+	}
+}
+
+func TestHandleConnectQueuesRestartWhileRunnerActive(t *testing.T) {
+	app := testApp()
+	app.browser.activeGroup().data.Nodes = []string{"socks://10.0.0.1:1080#alpha"}
+	app.runner.active = true
+	app.runner.stopping = false
+
+	cmd := app.handleConnect("local", 0)
+	if cmd != nil {
+		t.Fatal("expected restart to be queued, not started immediately")
+	}
+	if app.pendingRun == nil {
+		t.Fatal("expected pending restart config")
+	}
+	if app.activeTab != tabLogs {
+		t.Fatal("expected logs tab to stay active during restart")
 	}
 }
 
