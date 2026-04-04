@@ -93,22 +93,24 @@ jobs:
         with:
           go-version: "1.25"
 
-      - name: Build release binary
+      - name: Build release binaries
         run: |
           set -euo pipefail
-          name="sub2sing-${{ matrix.goos }}-${{ matrix.goarch }}"
-          if [[ "${{ matrix.goos }}" == "windows" ]]; then
-            name="${name}.exe"
-          fi
           mkdir -p dist
-          CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
-            go build -o "dist/${name}" ./cmd/sub2sing/
+          for cmd in sub2sing singer; do
+            name="${cmd}-${{ matrix.goos }}-${{ matrix.goarch }}"
+            if [[ "${{ matrix.goos }}" == "windows" ]]; then
+              name="${name}.exe"
+            fi
+            CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+              go build -o "dist/${name}" "./cmd/${cmd}/"
+          done
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/sub2sing-*
+          path: dist/*
 
   publish:
     needs:
@@ -131,7 +133,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh release create "${{ needs.prepare.outputs.tag }}" release-artifacts/sub2sing-* \
+          gh release create "${{ needs.prepare.outputs.tag }}" release-artifacts/* \
             --target "${{ needs.prepare.outputs.sha }}" \
             --title "${{ needs.prepare.outputs.tag }}" \
             --latest \

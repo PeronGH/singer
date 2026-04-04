@@ -246,6 +246,113 @@ func TestParseBase64Encoded(t *testing.T) {
 	}
 }
 
+func TestParseTrojanGRPCTransport(t *testing.T) {
+	line := `trojan://testpass@example.com:443?security=tls&type=grpc&serviceName=mygrpc#Test-GRPC`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ob.Options.(*option.TrojanOutboundOptions)
+	if opts.Transport == nil || opts.Transport.Type != C.V2RayTransportTypeGRPC {
+		t.Fatal("transport not grpc")
+	}
+	if opts.Transport.GRPCOptions.ServiceName != "mygrpc" {
+		t.Fatalf("grpc service = %q", opts.Transport.GRPCOptions.ServiceName)
+	}
+}
+
+func TestParseTrojanHTTPTransport(t *testing.T) {
+	line := `trojan://testpass@example.com:443?security=tls&type=http&host=example.com&path=%2Fh2#Test-H2`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ob.Options.(*option.TrojanOutboundOptions)
+	if opts.Transport == nil || opts.Transport.Type != C.V2RayTransportTypeHTTP {
+		t.Fatal("transport not http")
+	}
+	if opts.Transport.HTTPOptions.Path != "/h2" {
+		t.Fatalf("http path = %q", opts.Transport.HTTPOptions.Path)
+	}
+	if len(opts.Transport.HTTPOptions.Host) != 1 || opts.Transport.HTTPOptions.Host[0] != "example.com" {
+		t.Fatalf("http host = %v", opts.Transport.HTTPOptions.Host)
+	}
+}
+
+func TestParseTrojanNoTransport(t *testing.T) {
+	line := `trojan://testpass@example.com:443?security=tls#Test-NoTransport`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ob.Options.(*option.TrojanOutboundOptions)
+	if opts.Transport != nil {
+		t.Fatal("expected no transport")
+	}
+}
+
+func TestParseEmptyLine(t *testing.T) {
+	_, err := ParseLine("")
+	if err == nil {
+		t.Fatal("expected error for empty line")
+	}
+}
+
+func TestParseLineInvalidPort(t *testing.T) {
+	_, err := ParseLine("socks://10.0.0.1:99999#bad-port")
+	if err == nil {
+		t.Fatal("expected error for invalid port")
+	}
+}
+
+func TestParseTrojanMissingPassword(t *testing.T) {
+	_, err := ParseLine("trojan://@example.com:443#no-pass")
+	if err == nil {
+		t.Fatal("expected error for missing trojan password")
+	}
+}
+
+func TestParseHysteria2MissingPassword(t *testing.T) {
+	_, err := ParseLine("hy2://@example.com:443?sni=example.com#no-pass")
+	if err == nil {
+		t.Fatal("expected error for missing hy2 password")
+	}
+}
+
+func TestConfig(t *testing.T) {
+	outbounds, err := Parse(strings.NewReader("socks://10.0.0.1:1080#my-socks\nhttp://10.0.0.2:8080#my-http\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Config(outbounds, "my-socks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Log == nil || cfg.Log.Level != "info" {
+		t.Fatal("log level not set")
+	}
+	if len(cfg.Inbounds) != 1 {
+		t.Fatalf("inbounds = %d, want 1", len(cfg.Inbounds))
+	}
+	if len(cfg.Outbounds) != 2 {
+		t.Fatalf("outbounds = %d, want 2", len(cfg.Outbounds))
+	}
+	if cfg.Route == nil || cfg.Route.Final != "my-socks" {
+		t.Fatal("route final not set")
+	}
+}
+
+func TestConfigUnknownTag(t *testing.T) {
+	outbounds, err := Parse(strings.NewReader("socks://10.0.0.1:1080#my-socks\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Config(outbounds, "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for unknown tag")
+	}
+}
+
 func TestParseUnsupportedScheme(t *testing.T) {
 	_, err := ParseLine("vmess://something")
 	if err == nil {

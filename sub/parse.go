@@ -52,7 +52,7 @@ func Parse(r io.Reader) ([]option.Outbound, error) {
 		return nil, err
 	}
 
-	data := decodeBase64(bytes.TrimSpace(raw))
+	data := DecodeBody(bytes.TrimSpace(raw))
 
 	var outbounds []option.Outbound
 	scanner := bufio.NewScanner(bytes.NewReader(data))
@@ -70,10 +70,10 @@ func Parse(r io.Reader) ([]option.Outbound, error) {
 	return outbounds, nil
 }
 
-// decodeBase64 tries to base64-decode data. If the decoded result
+// DecodeBody tries to base64-decode data. If the decoded result
 // contains "://" (indicating protocol URIs), it returns the decoded bytes.
 // Otherwise it returns the original data unchanged.
-func decodeBase64(data []byte) []byte {
+func DecodeBody(data []byte) []byte {
 	decoded, err := base64.StdEncoding.DecodeString(string(data))
 	if err == nil && bytes.Contains(decoded, []byte("://")) {
 		return decoded
