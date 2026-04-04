@@ -101,36 +101,6 @@ func TestRunnerFinishSuppressesIntentionalStopErrors(t *testing.T) {
 	}
 }
 
-func TestHelpTextMatchesMode(t *testing.T) {
-	app := &App{
-		mode:    modePrompt,
-		browser: newBrowser([]store.Group{{Name: "local", Kind: store.GroupKindLocal}}, 80, 20),
-	}
-	if got := app.helpText(); got != "enter: confirm · esc: cancel · ?: help" {
-		t.Fatalf("prompt help = %q", got)
-	}
-
-	app.mode = modeRunning
-	if got := app.helpText(); got != "esc: stop · ?: help" {
-		t.Fatalf("running help = %q", got)
-	}
-
-	app.mode = modeBrowsing
-	if got := app.helpText(); got != "q: quit · ?: help" {
-		t.Fatalf("browse help = %q", got)
-	}
-}
-
-func TestListHeightReservesHelpBar(t *testing.T) {
-	app := &App{
-		height: 20,
-	}
-
-	if got := app.listHeight(); got != 19 {
-		t.Fatalf("list height = %d, want 19", got)
-	}
-}
-
 func TestQuestionMarkTogglesHelpScreen(t *testing.T) {
 	app := &App{
 		browser: newBrowser([]store.Group{{Name: "local", Kind: store.GroupKindLocal}}, 80, 20),

@@ -169,7 +169,7 @@ func (a *App) listHeight() int {
 	if a.runner.hasOutput() {
 		h -= a.logPaneHeight() + 1
 	}
-	return max(h, 4)
+	return max(h, 1)
 }
 
 func (a *App) logPaneHeight() int {
@@ -199,6 +199,15 @@ func (a *App) helpScreenView() string {
 		"ctrl+c  Quit the app, or stop sing-box while it is running",
 		"?       Open or close this help screen",
 		"",
+		helpSection.Render("Browse"),
+		"↑/↓              Move through nodes",
+		"/                Start filtering",
+		"tab/shift+tab    Switch groups",
+		"enter            Connect selected node",
+		"n                Add a new remote group",
+		"R                Refresh all remote groups",
+		"q                Quit",
+		"",
 	}
 
 	switch a.mode {
@@ -217,17 +226,6 @@ func (a *App) helpScreenView() string {
 			"pgdn    Scroll one page down",
 		)
 	default:
-		lines = append(lines,
-			helpSection.Render("Browse"),
-			"↑/↓              Move through nodes",
-			"/                Start filtering",
-			"tab/shift+tab    Switch groups",
-			"enter            Connect selected node",
-			"n                Add a new remote group",
-			"R                Refresh all remote groups",
-			"q                Quit",
-		)
-
 		if g := a.browser.activeGroupData(); g != nil {
 			switch {
 			case g.IsLocal():
