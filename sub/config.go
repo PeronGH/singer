@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 )
 
@@ -25,7 +24,7 @@ func Config(outbounds []option.Outbound, outboundTag string) (option.Options, er
 
 	return option.Options{
 		Log: &option.LogOptions{
-			Level: log.FormatLevel(log.LevelInfo),
+			Level: "info",
 		},
 		Inbounds: []option.Inbound{{
 			Type: C.TypeMixed,
