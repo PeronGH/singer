@@ -17,164 +17,224 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
-func TestNewCreatesManual(t *testing.T) {
+func TestNewCreatesLocalNodesFile(t *testing.T) {
 	s := testStore(t)
-	_, err := os.Stat(filepath.Join(s.dir, "manual.txt"))
-	if err != nil {
-		t.Fatal("manual.txt not created:", err)
-	}
-}
 
-func TestLoadGroupsManualFirst(t *testing.T) {
-	s := testStore(t)
-	// Create another group.
-	if err := os.WriteFile(filepath.Join(s.dir, "zz.txt"), []byte("socks://10.0.0.1:1080#zz\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	groups, err := s.LoadGroups()
+	info, err := os.Stat(filepath.Join(s.dir, localGroupName))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(groups) < 2 {
-		t.Fatalf("got %d groups, want >= 2", len(groups))
+	if !info.IsDir() {
+		t.Fatal("local is not a directory")
 	}
-	if groups[0].Name != "manual" {
-		t.Fatalf("first group = %q, want manual", groups[0].Name)
-	}
-	if groups[1].Name != "zz" {
-		t.Fatalf("second group = %q, want zz", groups[1].Name)
-	}
-	if len(groups[1].Nodes) != 1 {
-		t.Fatalf("zz nodes = %d, want 1", len(groups[1].Nodes))
+
+	if _, err := os.Stat(filepath.Join(s.dir, localGroupName, nodesFileName)); err != nil {
+		t.Fatal("local/nodes not created:", err)
 	}
 }
 
-func TestSaveAndLoadLocalGroup(t *testing.T) {
-	s := testStore(t)
-	g := Group{
-		Name:  "manual",
-		Nodes: []string{"socks://10.0.0.1:1080#node1", "http://10.0.0.2:8080#node2"},
+func TestNewRecreatesBrokenLocalDirectory(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", root)
+
+	appDir := filepath.Join(root, "singer")
+	if err := os.MkdirAll(filepath.Join(appDir, localGroupName), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if err := s.SaveGroup(g); err != nil {
+	if err := os.WriteFile(filepath.Join(appDir, localGroupName, urlFileName), []byte("https://example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, localGroupName, "extra"), []byte("keep? no, local is recreated\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	groups, err := s.LoadGroups()
-	if err != nil {
-		t.Fatal(err)
-	}
-	manual := groups[0]
-	if manual.Name != "manual" {
-		t.Fatalf("name = %q", manual.Name)
-	}
-	if len(manual.Nodes) != 2 {
-		t.Fatalf("nodes = %d, want 2", len(manual.Nodes))
-	}
-	if manual.IsSubscription() {
-		t.Fatal("manual should not be a subscription")
-	}
-}
-
-func TestSaveAndLoadSubscriptionGroup(t *testing.T) {
-	s := testStore(t)
-	g := Group{
-		Name:  "provider",
-		Nodes: []string{"trojan://pass@example.com:443#node1"},
-		URL:   "https://example.com/sub.txt",
-	}
-	if err := s.SaveGroup(g); err != nil {
-		t.Fatal(err)
-	}
-
-	groups, err := s.LoadGroups()
+	s, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var found *Group
-	for i := range groups {
-		if groups[i].Name == "provider" {
-			found = &groups[i]
-			break
-		}
-	}
-	if found == nil {
-		t.Fatal("provider group not found")
-	}
-	if !found.IsSubscription() {
-		t.Fatal("should be a subscription")
-	}
-	if found.URL != "https://example.com/sub.txt" {
-		t.Fatalf("url = %q", found.URL)
-	}
-	if len(found.Nodes) != 1 {
-		t.Fatalf("nodes = %d, want 1", len(found.Nodes))
-	}
-}
-
-func TestDeleteGroup(t *testing.T) {
-	s := testStore(t)
-	g := Group{
-		Name:  "deleteme",
-		Nodes: []string{"socks://10.0.0.1:1080#x"},
-		URL:   "https://example.com/sub.txt",
-	}
-	if err := s.SaveGroup(g); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(s.dir, localGroupName, urlFileName)); !os.IsNotExist(err) {
+		t.Fatal("local/url should be removed")
 	}
 
-	if err := s.DeleteGroup("deleteme"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Both files should be gone.
-	if _, err := os.Stat(filepath.Join(s.dir, "deleteme.txt")); !os.IsNotExist(err) {
-		t.Fatal("deleteme.txt still exists")
-	}
-	if _, err := os.Stat(filepath.Join(s.dir, "deleteme.url.txt")); !os.IsNotExist(err) {
-		t.Fatal("deleteme.url.txt still exists")
-	}
-}
-
-func TestDeleteNonexistentGroup(t *testing.T) {
-	s := testStore(t)
-	err := s.DeleteGroup("nonexistent")
-	if err == nil {
-		t.Fatal("expected error deleting nonexistent group")
-	}
-}
-
-func TestUrlTxtIgnoredAsGroup(t *testing.T) {
-	s := testStore(t)
-	// Write a .url.txt without a matching .txt — should not appear as a group.
-	if err := os.WriteFile(filepath.Join(s.dir, "orphan.url.txt"), []byte("https://example.com\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	groups, err := s.LoadGroups()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, g := range groups {
-		if g.Name == "orphan.url" || g.Name == "orphan" {
-			t.Fatalf("orphan .url.txt appeared as group %q", g.Name)
-		}
-	}
-}
-
-func TestSaveEmptyGroup(t *testing.T) {
-	s := testStore(t)
-	g := Group{Name: "empty", Nodes: nil}
-	if err := s.SaveGroup(g); err != nil {
-		t.Fatal(err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(s.dir, "empty.txt"))
+	data, err := os.ReadFile(filepath.Join(s.dir, localGroupName, nodesFileName))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(data) != 0 {
-		t.Fatalf("expected empty file, got %q", data)
+		t.Fatalf("local/nodes should be empty, got %q", data)
+	}
+}
+
+func TestLoadGroupsReturnsLocalFirstAndRemoteGroups(t *testing.T) {
+	s := testStore(t)
+	if err := s.UpsertRemote("b", "https://example.com/b", []string{"socks://10.0.0.2:1080#b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertRemote("a", "https://example.com/a", []string{"socks://10.0.0.1:1080#a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	groups, err := s.LoadGroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(groups) != 3 {
+		t.Fatalf("groups = %d, want 3", len(groups))
+	}
+	if groups[0].Name != localGroupName || !groups[0].IsLocal() {
+		t.Fatalf("first group = %+v, want local", groups[0])
+	}
+	if groups[1].Name != "a" || !groups[1].IsRemote() {
+		t.Fatalf("second group = %+v, want remote a", groups[1])
+	}
+	if groups[2].Name != "b" || !groups[2].IsRemote() {
+		t.Fatalf("third group = %+v, want remote b", groups[2])
+	}
+}
+
+func TestSaveLocalWritesOnlyNodes(t *testing.T) {
+	s := testStore(t)
+	nodes := []string{"socks://10.0.0.1:1080#one", "http://10.0.0.2:8080#two"}
+
+	if err := s.SaveLocal(nodes); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(s.dir, localGroupName, nodesFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "socks://10.0.0.1:1080#one\nhttp://10.0.0.2:8080#two\n" {
+		t.Fatalf("unexpected local/nodes content %q", data)
+	}
+
+	if _, err := os.Stat(filepath.Join(s.dir, localGroupName, urlFileName)); !os.IsNotExist(err) {
+		t.Fatal("local/url should not exist")
+	}
+}
+
+func TestUpsertRemoteWritesNodesAndURL(t *testing.T) {
+	s := testStore(t)
+	nodes := []string{"trojan://pass@example.com:443#node1"}
+
+	if err := s.UpsertRemote("provider", "https://example.com/sub.txt", nodes); err != nil {
+		t.Fatal(err)
+	}
+
+	nodeData, err := os.ReadFile(filepath.Join(s.dir, "provider", nodesFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(nodeData) != "trojan://pass@example.com:443#node1\n" {
+		t.Fatalf("unexpected provider/nodes content %q", nodeData)
+	}
+
+	urlData, err := os.ReadFile(filepath.Join(s.dir, "provider", urlFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(urlData) != "https://example.com/sub.txt\n" {
+		t.Fatalf("unexpected provider/url content %q", urlData)
+	}
+}
+
+func TestDeleteRemoteRemovesDirectory(t *testing.T) {
+	s := testStore(t)
+	if err := s.UpsertRemote("deleteme", "https://example.com/sub.txt", []string{"socks://10.0.0.1:1080#x"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.DeleteRemote("deleteme"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(s.dir, "deleteme")); !os.IsNotExist(err) {
+		t.Fatal("deleteme directory still exists")
+	}
+}
+
+func TestDeleteRemoteRejectsLocal(t *testing.T) {
+	s := testStore(t)
+	if err := s.DeleteRemote(localGroupName); err == nil {
+		t.Fatal("expected deleting local to fail")
+	}
+}
+
+func TestValidateRemoteNameRejectsInvalidNames(t *testing.T) {
+	for _, name := range []string{"", "local", "with space", "slash/name", ".."} {
+		if err := ValidateRemoteName(name); err == nil {
+			t.Fatalf("expected %q to be rejected", name)
+		}
+	}
+}
+
+func TestNewDeletesInvalidRemoteDirectories(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", root)
+
+	appDir := filepath.Join(root, "singer")
+	badNameDir := filepath.Join(appDir, "bad name")
+	missingURLDir := filepath.Join(appDir, "missing-url")
+	emptyURLDir := filepath.Join(appDir, "empty-url")
+	validDir := filepath.Join(appDir, "keep-me")
+
+	for _, dir := range []string{badNameDir, missingURLDir, emptyURLDir, validDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, nodesFileName), []byte("socks://10.0.0.1:1080#x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(emptyURLDir, urlFileName), []byte("   \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(validDir, urlFileName), []byte("https://example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"bad name", "missing-url", "empty-url"} {
+		if _, err := os.Stat(filepath.Join(s.dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s should have been deleted", name)
+		}
+	}
+	if _, err := os.Stat(validDir); err != nil {
+		t.Fatal("valid remote directory should remain:", err)
+	}
+}
+
+func TestNewKeepsValidRemoteDirectoriesWithExtraFiles(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", root)
+
+	appDir := filepath.Join(root, "singer")
+	remoteDir := filepath.Join(appDir, "keep-me")
+	if err := os.MkdirAll(remoteDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(remoteDir, nodesFileName), []byte("socks://10.0.0.1:1080#x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(remoteDir, urlFileName), []byte("https://example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(remoteDir, "notes"), []byte("leave me alone\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(s.dir, "keep-me", "notes")); err != nil {
+		t.Fatal("extra file should be preserved:", err)
 	}
 }

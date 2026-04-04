@@ -1,0 +1,364 @@
+package tui
+
+import (
+	"slices"
+	"strings"
+
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"github.com/PeronGH/singer/internal/store"
+)
+
+type browserActionKind int
+
+const (
+	browserActionNone browserActionKind = iota
+	browserActionConnect
+	browserActionAddRemote
+	browserActionRefreshRemote
+	browserActionRefreshAll
+	browserActionDeleteRemote
+	browserActionAddLocalNode
+	browserActionEditLocalNode
+	browserActionDeleteLocalNode
+	browserActionQuit
+)
+
+type browserAction struct {
+	Kind      browserActionKind
+	GroupName string
+	NodeIndex int
+	NodeURI   string
+}
+
+type browserModel struct {
+	groups []group
+	tab    int
+	width  int
+	height int
+}
+
+var (
+	groupNextKey  = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next group"))
+	groupPrevKey  = key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev group"))
+	connectKey    = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "connect"))
+	addRemoteKey  = key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new remote"))
+	refreshAllKey = key.NewBinding(
+		key.WithKeys("R"),
+		key.WithHelp("R", "refresh all"),
+	)
+	addLocalKey     = key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add node"))
+	editLocalKey    = key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit node"))
+	deleteLocalKey  = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete node"))
+	refreshKey      = key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh"))
+	deleteRemoteKey = key.NewBinding(
+		key.WithKeys("D"),
+		key.WithHelp("D", "delete remote"),
+	)
+	quitKey = key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit"))
+)
+
+func newBrowser(groups []store.Group, width, height int) browserModel {
+	b := browserModel{
+		groups: make([]group, len(groups)),
+		width:  width,
+		height: height,
+	}
+	for i, g := range groups {
+		b.groups[i] = newGroup(g, width, height)
+		b.bindHelp(i)
+	}
+	return b
+}
+
+func (b *browserModel) setSize(width, height int) {
+	b.width = width
+	b.height = height
+	for i := range b.groups {
+		b.groups[i].setSize(width, height)
+	}
+}
+
+func (b *browserModel) activeGroup() *group {
+	if b.tab < 0 || b.tab >= len(b.groups) {
+		return nil
+	}
+	return &b.groups[b.tab]
+}
+
+func (b *browserModel) activeGroupData() *store.Group {
+	g := b.activeGroup()
+	if g == nil {
+		return nil
+	}
+	return &g.data
+}
+
+func (b *browserModel) activeGroupName() string {
+	if g := b.activeGroupData(); g != nil {
+		return g.Name
+	}
+	return ""
+}
+
+func (b *browserModel) activeStatus(message string) tea.Cmd {
+	g := b.activeGroup()
+	if g == nil {
+		return nil
+	}
+	return g.list.NewStatusMessage(message)
+}
+
+func (b *browserModel) hasRemoteGroups() bool {
+	for _, g := range b.groups {
+		if g.data.IsRemote() {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *browserModel) remoteGroups() []store.Group {
+	remotes := make([]store.Group, 0, len(b.groups))
+	for _, g := range b.groups {
+		if g.data.IsRemote() {
+			remotes = append(remotes, g.data)
+		}
+	}
+	return remotes
+}
+
+func (b *browserModel) cycleTab(delta int) {
+	if len(b.groups) == 0 {
+		return
+	}
+	b.tab = (b.tab + delta + len(b.groups)) % len(b.groups)
+}
+
+func (b *browserModel) update(msg tea.Msg) (browserAction, tea.Cmd) {
+	g := b.activeGroup()
+	if g == nil {
+		return browserAction{}, nil
+	}
+
+	if g.list.SettingFilter() {
+		var cmd tea.Cmd
+		g.list, cmd = g.list.Update(msg)
+		return browserAction{}, cmd
+	}
+
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
+		switch msg.String() {
+		case "tab":
+			b.cycleTab(1)
+			return browserAction{}, nil
+		case "shift+tab":
+			b.cycleTab(-1)
+			return browserAction{}, nil
+		case "enter":
+			idx, ok := b.selectedNodeIndex(g)
+			if !ok {
+				return browserAction{}, nil
+			}
+			return browserAction{
+				Kind:      browserActionConnect,
+				GroupName: g.data.Name,
+				NodeIndex: idx,
+			}, nil
+		case "n":
+			return browserAction{Kind: browserActionAddRemote}, nil
+		case "R":
+			return browserAction{Kind: browserActionRefreshAll}, nil
+		case "q":
+			return browserAction{Kind: browserActionQuit}, nil
+		case "a":
+			if g.data.IsLocal() {
+				return browserAction{Kind: browserActionAddLocalNode}, nil
+			}
+		case "e":
+			if g.data.IsLocal() {
+				idx, ok := b.selectedNodeIndex(g)
+				if !ok {
+					return browserAction{}, nil
+				}
+				return browserAction{
+					Kind:      browserActionEditLocalNode,
+					GroupName: g.data.Name,
+					NodeIndex: idx,
+					NodeURI:   g.data.Nodes[idx],
+				}, nil
+			}
+		case "d":
+			if g.data.IsLocal() {
+				idx, ok := b.selectedNodeIndex(g)
+				if !ok {
+					return browserAction{}, nil
+				}
+				return browserAction{
+					Kind:      browserActionDeleteLocalNode,
+					GroupName: g.data.Name,
+					NodeIndex: idx,
+				}, nil
+			}
+		case "r":
+			if g.data.IsRemote() {
+				return browserAction{
+					Kind:      browserActionRefreshRemote,
+					GroupName: g.data.Name,
+				}, nil
+			}
+		case "D":
+			if g.data.IsRemote() {
+				return browserAction{
+					Kind:      browserActionDeleteRemote,
+					GroupName: g.data.Name,
+				}, nil
+			}
+		}
+	}
+
+	var cmd tea.Cmd
+	g.list, cmd = g.list.Update(msg)
+	return browserAction{}, cmd
+}
+
+func (b *browserModel) upsertGroup(data store.Group) tea.Cmd {
+	targetName := data.Name
+	found := false
+	var cmd tea.Cmd
+
+	for i := range b.groups {
+		if b.groups[i].data.Name != data.Name {
+			continue
+		}
+
+		found = true
+		b.groups[i].data = data
+		cmd = b.groups[i].syncItems()
+		break
+	}
+
+	if !found {
+		b.groups = append(b.groups, newGroup(data, b.width, b.height))
+	}
+
+	b.sortGroups()
+	for i := range b.groups {
+		if b.groups[i].data.Name == targetName {
+			b.tab = i
+			break
+		}
+	}
+	return cmd
+}
+
+func (b *browserModel) removeRemote(name string) {
+	for i := range b.groups {
+		if b.groups[i].data.Name != name {
+			continue
+		}
+		b.groups = slices.Delete(b.groups, i, i+1)
+		if len(b.groups) == 0 {
+			b.tab = 0
+			return
+		}
+		if b.tab >= len(b.groups) {
+			b.tab = len(b.groups) - 1
+		}
+		return
+	}
+}
+
+func (b *browserModel) updateLocalNodes(nodes []string) tea.Cmd {
+	for i := range b.groups {
+		if !b.groups[i].data.IsLocal() {
+			continue
+		}
+
+		b.groups[i].data.Nodes = append([]string(nil), nodes...)
+		cmd := b.groups[i].syncItems()
+		b.bindHelp(i)
+		b.tab = i
+		return cmd
+	}
+	return nil
+}
+
+func (b *browserModel) sortGroups() {
+	if len(b.groups) <= 1 {
+		return
+	}
+
+	activeName := b.activeGroupName()
+	slices.SortStableFunc(b.groups, func(a, c group) int {
+		switch {
+		case a.data.IsLocal() && !c.data.IsLocal():
+			return -1
+		case !a.data.IsLocal() && c.data.IsLocal():
+			return 1
+		default:
+			return strings.Compare(a.data.Name, c.data.Name)
+		}
+	})
+
+	for i := range b.groups {
+		b.bindHelp(i)
+		if b.groups[i].data.Name == activeName {
+			b.tab = i
+		}
+	}
+}
+
+func (b *browserModel) selectedNodeIndex(g *group) (int, bool) {
+	if g == nil || g.list.SelectedItem() == nil {
+		return 0, false
+	}
+	idx := g.list.GlobalIndex()
+	if idx < 0 || idx >= len(g.data.Nodes) {
+		return 0, false
+	}
+	return idx, true
+}
+
+func (b *browserModel) bindHelp(idx int) {
+	if idx < 0 || idx >= len(b.groups) {
+		return
+	}
+
+	groupKind := b.groups[idx].data.Kind
+	b.groups[idx].list.AdditionalShortHelpKeys = func() []key.Binding {
+		return shortHelpForGroup(groupKind)
+	}
+	b.groups[idx].list.AdditionalFullHelpKeys = func() []key.Binding {
+		return fullHelpForGroup(groupKind)
+	}
+}
+
+func shortHelpForGroup(kind store.GroupKind) []key.Binding {
+	keys := []key.Binding{groupNextKey, connectKey, addRemoteKey, refreshAllKey}
+	switch kind {
+	case store.GroupKindLocal:
+		keys = append(keys, addLocalKey, deleteLocalKey, quitKey)
+	case store.GroupKindRemote:
+		keys = append(keys, refreshKey, deleteRemoteKey, quitKey)
+	}
+	return keys
+}
+
+func fullHelpForGroup(kind store.GroupKind) []key.Binding {
+	keys := []key.Binding{
+		groupNextKey,
+		groupPrevKey,
+		connectKey,
+		addRemoteKey,
+		refreshAllKey,
+		quitKey,
+	}
+	switch kind {
+	case store.GroupKindLocal:
+		keys = append(keys, addLocalKey, editLocalKey, deleteLocalKey)
+	case store.GroupKindRemote:
+		keys = append(keys, refreshKey, deleteRemoteKey)
+	}
+	return keys
+}

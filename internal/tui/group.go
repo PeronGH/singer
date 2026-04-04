@@ -49,15 +49,9 @@ func newGroup(g store.Group, width, height int) group {
 		items[i] = nodeItem{uri: n}
 	}
 
-	delegate := list.NewDefaultDelegate()
-	delegate.UpdateFunc = delegateUpdate
-
-	l := list.New(items, delegate, width, height)
-	l.Title = g.Name
-	if g.IsSubscription() {
-		l.Title += " ↻"
-	}
-	l.SetShowHelp(false)
+	l := list.New(items, list.NewDefaultDelegate(), width, height)
+	l.Title = titleForGroup(g)
+	l.SetShowHelp(true)
 	l.SetShowStatusBar(false)
 	l.DisableQuitKeybindings()
 
@@ -68,41 +62,19 @@ func (g *group) setSize(w, h int) {
 	g.list.SetSize(w, h)
 }
 
-func (g *group) syncItems() {
+func (g *group) syncItems() tea.Cmd {
+	g.list.Title = titleForGroup(g.data)
+
 	items := make([]list.Item, len(g.data.Nodes))
 	for i, n := range g.data.Nodes {
 		items[i] = nodeItem{uri: n}
 	}
-	g.list.SetItems(items)
+	return g.list.SetItems(items)
 }
 
-// delegateUpdate handles per-item key presses, returning action messages.
-func delegateUpdate(msg tea.Msg, m *list.Model) tea.Cmd {
-	km, ok := msg.(tea.KeyPressMsg)
-	if !ok {
-		return nil
+func titleForGroup(g store.Group) string {
+	if g.IsRemote() {
+		return g.Name + " (remote)"
 	}
-
-	switch km.String() {
-	case "enter":
-		if m.SelectedItem() != nil {
-			idx := m.Index()
-			return func() tea.Msg { return connectMsg{index: idx} }
-		}
-	case "a":
-		return func() tea.Msg { return addNodeMsg{} }
-	case "e":
-		if item := m.SelectedItem(); item != nil {
-			uri := item.(nodeItem).uri
-			return func() tea.Msg { return editNodeMsg{nodeURI: uri} }
-		}
-	case "d":
-		idx := m.Index()
-		return func() tea.Msg { return deleteNodeMsg{index: idx} }
-	case "r":
-		return func() tea.Msg { return refreshMsg{} }
-	}
-
-	return nil
+	return g.Name
 }
-

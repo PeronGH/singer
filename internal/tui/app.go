@@ -1,52 +1,54 @@
 package tui
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/PeronGH/singer/internal/store"
 	"github.com/PeronGH/singer/sub"
 )
 
-type appState int
+type appMode int
 
 const (
-	stateBrowsing appState = iota
-	stateInputting
-	stateRunning
+	modeBrowsing appMode = iota
+	modePrompt
+	modeRunning
 )
-
-const helpBarH = 1
 
 type App struct {
 	store  *store.Store
-	groups []group
-	tab    int
-	state  appState
+	client *http.Client
 
-	input   inputModel
-	runner  runner
-	logView viewport.Model
+	browser browserModel
+	prompt  promptModel
+	runner  runnerModel
 
-	width, height int
-	err           error
+	mode             appMode
+	width, height    int
+	editingNodeIndex int
+	err              error
 }
 
-func NewApp(s *store.Store) *App {
-	groups, _ := s.LoadGroups()
-	tabs := make([]group, len(groups))
-	for i, g := range groups {
-		tabs[i] = newGroup(g, 0, 0)
+func NewApp(s *store.Store) (*App, error) {
+	groups, err := s.LoadGroups()
+	if err != nil {
+		return nil, err
 	}
+
 	return &App{
-		store:   s,
-		groups:  tabs,
-		logView: viewport.New(),
-	}
+		store:            s,
+		client:           &http.Client{Timeout: 15 * time.Second},
+		browser:          newBrowser(groups, 0, 0),
+		prompt:           newPrompt(0),
+		runner:           newRunner(),
+		editingNodeIndex: -1,
+	}, nil
 }
 
 func (a *App) Init() tea.Cmd {
@@ -56,166 +58,222 @@ func (a *App) Init() tea.Cmd {
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		return a, a.handleResize(msg)
+		a.width = msg.Width
+		a.height = msg.Height
+		a.resizeChildren()
+		return a, nil
+	case tea.KeyPressMsg:
+		if msg.String() == "ctrl+c" {
+			if a.mode == modeRunning {
+				a.runner.stop()
+				return a, nil
+			}
+			return a, tea.Quit
+		}
 	case logLineMsg:
-		return a, a.handleLogLine(msg)
+		return a, a.runner.appendLine(string(msg))
 	case runnerDoneMsg:
 		return a, a.handleRunnerDone(msg)
 	case fetchDoneMsg:
 		return a, a.handleFetchDone(msg)
-	case inputResultMsg:
-		return a, a.handleInputResult(msg)
-	case inputCancelMsg:
-		a.state = stateBrowsing
-		return a, nil
-	case connectMsg:
-		return a, a.handleConnect(msg)
-	case addNodeMsg:
-		return a, a.startAddNode()
-	case editNodeMsg:
-		return a, a.startEditNode(msg)
-	case deleteNodeMsg:
-		return a, a.handleDeleteNode(msg)
-	case refreshMsg:
-		return a, a.handleRefresh()
-	case tea.PasteMsg:
-		if a.state == stateInputting {
-			return a, a.input.Update(msg)
-		}
-	case tea.KeyPressMsg:
-		return a, a.handleKey(msg)
 	}
 
-	// Forward unhandled messages to active list.
-	if a.state == stateBrowsing && len(a.groups) > 0 {
-		return a, a.updateActiveList(msg)
+	switch a.mode {
+	case modePrompt:
+		action, cmd := a.prompt.update(msg)
+		return a, tea.Batch(cmd, a.handlePromptAction(action))
+	case modeRunning:
+		if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "escape" {
+			a.runner.stop()
+			return a, nil
+		}
+		return a, a.runner.update(msg)
+	default:
+		action, cmd := a.browser.update(msg)
+		return a, tea.Batch(cmd, a.handleBrowserAction(action))
 	}
-	return a, nil
 }
 
-func (a *App) handleResize(msg tea.WindowSizeMsg) tea.Cmd {
-	a.width = msg.Width
-	a.height = msg.Height
-	a.resizeChildren()
-	return nil
+func (a *App) View() tea.View {
+	if a.width == 0 || a.height == 0 {
+		v := tea.NewView("")
+		v.AltScreen = true
+		return v
+	}
+
+	sections := make([]string, 0, 4)
+	if g := a.browser.activeGroup(); g != nil {
+		sections = append(sections, g.list.View())
+	}
+
+	if a.err != nil {
+		sections = append(sections, errStyle.Width(a.width).Render("Error: "+a.err.Error()))
+	}
+
+	if a.mode == modePrompt {
+		sections = append(sections, a.prompt.view())
+	}
+
+	if a.runner.hasOutput() {
+		sections = append(sections, logHeader.Width(a.width).Render("── sing-box ──"))
+		sections = append(sections, a.runner.logView.View())
+	}
+
+	view := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, sections...))
+	view.AltScreen = true
+	return view
 }
 
 func (a *App) resizeChildren() {
-	listH := a.listHeight()
-	for i := range a.groups {
-		a.groups[i].setSize(a.width, listH)
-	}
-	logH := a.logPaneHeight()
-	a.logView.SetWidth(a.width)
-	a.logView.SetHeight(logH)
+	a.browser.setSize(a.width, a.listHeight())
+	a.prompt.setWidth(a.width)
+	a.runner.setSize(a.width, a.logPaneHeight())
 }
 
 func (a *App) listHeight() int {
-	h := a.height - helpBarH
-	if a.state == stateRunning || len(a.runner.lines) > 0 {
-		h -= a.logPaneHeight() + 1 // +1 for header
-	}
-	if a.state == stateInputting {
-		h -= 1
-	}
+	h := a.height
 	if a.err != nil {
-		h -= 1
+		h--
 	}
-	return max(h, 3)
+	if a.mode == modePrompt {
+		h--
+	}
+	if a.runner.hasOutput() {
+		h -= a.logPaneHeight() + 1
+	}
+	return max(h, 4)
 }
 
 func (a *App) logPaneHeight() int {
 	return max(a.height/3, 5)
 }
 
-func (a *App) handleKey(msg tea.KeyPressMsg) tea.Cmd {
-	key := msg.String()
-
-	// ctrl+c always works, regardless of state.
-	if key == "ctrl+c" {
-		if a.state == stateRunning {
-			a.runner.stop()
-			a.state = stateBrowsing
-			return nil
-		}
-		if a.state == stateInputting {
-			a.state = stateBrowsing
-			return nil
-		}
+func (a *App) handleBrowserAction(action browserAction) tea.Cmd {
+	switch action.Kind {
+	case browserActionNone:
+		return nil
+	case browserActionQuit:
 		return tea.Quit
-	}
-
-	// Delegate to input when active.
-	if a.state == stateInputting {
-		return a.input.Update(msg)
-	}
-
-	switch key {
-	case "q", "escape":
-		if a.state == stateRunning {
-			a.runner.stop()
-			a.state = stateBrowsing
-			a.resizeChildren()
+	case browserActionConnect:
+		return a.handleConnect(action.GroupName, action.NodeIndex)
+	case browserActionAddRemote:
+		a.err = nil
+		a.mode = modePrompt
+		a.prompt.remoteName = ""
+		return a.prompt.start(promptFlowRemoteName, "Remote name: ", "")
+	case browserActionRefreshRemote:
+		g := a.findGroup(action.GroupName)
+		if g == nil || !g.data.IsRemote() {
 			return nil
 		}
-		// Don't quit if the list is filtering.
-		if g := a.activeGroup(); g != nil && g.list.FilterState() != 0 {
-			return a.updateActiveList(msg)
+		a.err = nil
+		return fetchRemoteCmd(a.client, g.data.Name, g.data.URL)
+	case browserActionRefreshAll:
+		remotes := a.browser.remoteGroups()
+		if len(remotes) == 0 {
+			return nil
 		}
-		return tea.Quit
-	case "tab":
-		a.cycleTab(1)
-		return nil
-	case "shift+tab":
-		a.cycleTab(-1)
-		return nil
-	case "n":
-		if a.state == stateBrowsing {
-			return a.startAddSub()
+
+		a.err = nil
+		cmds := make([]tea.Cmd, 0, len(remotes))
+		for _, g := range remotes {
+			cmds = append(cmds, fetchRemoteCmd(a.client, g.Name, g.URL))
 		}
-	case "D":
-		if a.state == stateBrowsing {
-			return a.handleDeleteGroup()
+		return tea.Batch(cmds...)
+	case browserActionDeleteRemote:
+		if err := a.store.DeleteRemote(action.GroupName); err != nil {
+			a.err = err
+			return nil
 		}
-	}
-
-	if a.state == stateRunning {
-		var cmd tea.Cmd
-		a.logView, cmd = a.logView.Update(msg)
-		return cmd
-	}
-
-	return a.updateActiveList(msg)
-}
-
-func (a *App) updateActiveList(msg tea.Msg) tea.Cmd {
-	g := a.activeGroup()
-	if g == nil {
+		a.err = nil
+		a.browser.removeRemote(action.GroupName)
+		return a.browser.activeStatus("deleted remote " + action.GroupName)
+	case browserActionAddLocalNode:
+		a.err = nil
+		a.mode = modePrompt
+		a.editingNodeIndex = -1
+		return a.prompt.start(promptFlowAddLocalNode, "Local node URI: ", "")
+	case browserActionEditLocalNode:
+		a.err = nil
+		a.mode = modePrompt
+		a.editingNodeIndex = action.NodeIndex
+		return a.prompt.start(promptFlowEditLocalNode, "Edit local node URI: ", action.NodeURI)
+	case browserActionDeleteLocalNode:
+		return a.deleteLocalNode(action.NodeIndex)
+	default:
 		return nil
 	}
-	var cmd tea.Cmd
-	g.list, cmd = g.list.Update(msg)
-	return cmd
 }
 
-func (a *App) activeGroup() *group {
-	if a.tab < 0 || a.tab >= len(a.groups) {
+func (a *App) handlePromptAction(action promptAction) tea.Cmd {
+	switch action.Kind {
+	case promptActionNone:
+		return nil
+	case promptActionCancel:
+		a.mode = modeBrowsing
+		a.prompt.reset()
+		a.editingNodeIndex = -1
+		return nil
+	case promptActionConfirm:
+		value := strings.TrimSpace(action.Value)
+		switch a.prompt.flow {
+		case promptFlowRemoteName:
+			if value == "" {
+				a.mode = modeBrowsing
+				a.prompt.reset()
+				return nil
+			}
+			if err := store.ValidateRemoteName(value); err != nil {
+				a.err = err
+				return a.prompt.start(promptFlowRemoteName, "Remote name: ", value)
+			}
+
+			a.err = nil
+			a.mode = modePrompt
+			a.prompt.remoteName = value
+			return a.prompt.start(promptFlowRemoteURL, "Remote URL: ", "")
+		case promptFlowRemoteURL:
+			name := a.prompt.remoteName
+			a.mode = modeBrowsing
+			a.prompt.reset()
+			if value == "" {
+				return nil
+			}
+			a.err = nil
+			return fetchRemoteCmd(a.client, name, value)
+		case promptFlowAddLocalNode:
+			a.mode = modeBrowsing
+			a.prompt.reset()
+			if value == "" {
+				return nil
+			}
+
+			local := a.localGroup()
+			if local == nil {
+				a.err = fmt.Errorf("local group not loaded")
+				return nil
+			}
+
+			nodes := append(append([]string(nil), local.data.Nodes...), value)
+			return a.saveLocalNodes(nodes, "added local node")
+		case promptFlowEditLocalNode:
+			a.mode = modeBrowsing
+			a.prompt.reset()
+			if value == "" {
+				a.editingNodeIndex = -1
+				return nil
+			}
+			return a.replaceLocalNode(a.editingNodeIndex, value)
+		default:
+			return nil
+		}
+	default:
 		return nil
 	}
-	return &a.groups[a.tab]
 }
 
-func (a *App) cycleTab(delta int) {
-	if len(a.groups) == 0 {
-		return
-	}
-	a.tab = (a.tab + delta + len(a.groups)) % len(a.groups)
-}
-
-// --- Connect ---
-
-func (a *App) handleConnect(msg connectMsg) tea.Cmd {
-	g := a.activeGroup()
+func (a *App) handleConnect(groupName string, nodeIndex int) tea.Cmd {
+	g := a.findGroup(groupName)
 	if g == nil {
 		return nil
 	}
@@ -225,12 +283,11 @@ func (a *App) handleConnect(msg connectMsg) tea.Cmd {
 		a.err = err
 		return nil
 	}
-
-	if msg.index >= len(outbounds) {
+	if nodeIndex < 0 || nodeIndex >= len(outbounds) {
 		return nil
 	}
 
-	cfg, err := sub.Config(outbounds, outbounds[msg.index].Tag)
+	cfg, err := sub.Config(outbounds, outbounds[nodeIndex].Tag)
 	if err != nil {
 		a.err = err
 		return nil
@@ -243,154 +300,9 @@ func (a *App) handleConnect(msg connectMsg) tea.Cmd {
 	}
 
 	a.err = nil
-	a.state = stateRunning
+	a.mode = modeRunning
 	a.resizeChildren()
 	return a.runner.start(configJSON)
-}
-
-func (a *App) handleLogLine(msg logLineMsg) tea.Cmd {
-	a.runner.appendLine(string(msg))
-	a.logView.SetContent(a.runner.logContent())
-	a.logView.GotoBottom()
-	return a.runner.waitNext()
-}
-
-func (a *App) handleRunnerDone(msg runnerDoneMsg) tea.Cmd {
-	a.runner.cmd = nil
-	a.state = stateBrowsing
-	if msg.err != nil {
-		a.err = msg.err
-	}
-	a.resizeChildren()
-	return nil
-}
-
-// --- Node editing (local groups only) ---
-
-func (a *App) startAddNode() tea.Cmd {
-	g := a.activeGroup()
-	if g == nil || g.data.IsSubscription() {
-		return nil
-	}
-	a.state = stateInputting
-	a.input.flow = flowAddNode
-	return a.input.start(flowAddNode, "Add node URI: ", "", a.width-20)
-}
-
-func (a *App) startEditNode(msg editNodeMsg) tea.Cmd {
-	g := a.activeGroup()
-	if g == nil || g.data.IsSubscription() {
-		return nil
-	}
-	a.state = stateInputting
-	return a.input.start(flowEditNode, "Edit node URI: ", msg.nodeURI, a.width-20)
-}
-
-func (a *App) handleDeleteNode(msg deleteNodeMsg) tea.Cmd {
-	g := a.activeGroup()
-	if g == nil || g.data.IsSubscription() || msg.index >= len(g.data.Nodes) {
-		return nil
-	}
-	g.data.Nodes = append(g.data.Nodes[:msg.index], g.data.Nodes[msg.index+1:]...)
-	g.syncItems()
-	return a.saveGroup(g)
-}
-
-// --- Subscription management ---
-
-func (a *App) startAddSub() tea.Cmd {
-	a.state = stateInputting
-	return a.input.start(flowSubName, "Subscription name: ", "", a.width-25)
-}
-
-func (a *App) handleRefresh() tea.Cmd {
-	g := a.activeGroup()
-	if g == nil || !g.data.IsSubscription() {
-		return nil
-	}
-	return a.fetchSubscription(g.data.Name, g.data.URL)
-}
-
-func (a *App) handleDeleteGroup() tea.Cmd {
-	g := a.activeGroup()
-	if g == nil || g.data.Name == "manual" {
-		return nil
-	}
-	if err := a.store.DeleteGroup(g.data.Name); err != nil {
-		a.err = err
-		return nil
-	}
-	a.groups = append(a.groups[:a.tab], a.groups[a.tab+1:]...)
-	if a.tab >= len(a.groups) {
-		a.tab = max(len(a.groups)-1, 0)
-	}
-	return nil
-}
-
-func (a *App) handleInputResult(msg inputResultMsg) tea.Cmd {
-	a.state = stateBrowsing
-	value := strings.TrimSpace(msg.value)
-	if value == "" {
-		return nil
-	}
-
-	switch a.input.flow {
-	case flowAddNode:
-		g := a.activeGroup()
-		if g == nil {
-			return nil
-		}
-		g.data.Nodes = append(g.data.Nodes, value)
-		g.syncItems()
-		g.list.Select(len(g.data.Nodes) - 1)
-		return a.saveGroup(g)
-
-	case flowEditNode:
-		g := a.activeGroup()
-		if g == nil {
-			return nil
-		}
-		idx := g.list.Index()
-		if idx < len(g.data.Nodes) {
-			g.data.Nodes[idx] = value
-			g.syncItems()
-		}
-		return a.saveGroup(g)
-
-	case flowSubName:
-		a.input.subName = value
-		a.state = stateInputting
-		return a.input.start(flowSubURL, "Subscription URL: ", "", a.width-25)
-
-	case flowSubURL:
-		return a.fetchSubscription(a.input.subName, value)
-	}
-
-	return nil
-}
-
-func (a *App) fetchSubscription(name, subURL string) tea.Cmd {
-	return func() tea.Msg {
-		resp, err := http.Get(subURL)
-		if err != nil {
-			return fetchDoneMsg{name: name, err: err}
-		}
-		defer resp.Body.Close() //nolint:errcheck
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fetchDoneMsg{name: name, err: err}
-		}
-
-		decoded := sub.DecodeBody(body)
-		lines := splitLines(string(decoded))
-
-		if _, err := sub.Parse(strings.NewReader(string(decoded))); err != nil {
-			return fetchDoneMsg{name: name, err: err}
-		}
-
-		return fetchDoneMsg{name: name, url: subURL, nodes: lines}
-	}
 }
 
 func (a *App) handleFetchDone(msg fetchDoneMsg) tea.Cmd {
@@ -399,96 +311,126 @@ func (a *App) handleFetchDone(msg fetchDoneMsg) tea.Cmd {
 		return nil
 	}
 
-	gData := store.Group{Name: msg.name, Nodes: msg.nodes, URL: msg.url}
+	if err := a.store.UpsertRemote(msg.group.Name, msg.group.URL, msg.group.Nodes); err != nil {
+		a.err = err
+		return nil
+	}
 
-	idx := -1
-	for i, g := range a.groups {
-		if g.data.Name == msg.name {
-			idx = i
-			break
+	a.err = nil
+	cmd := a.browser.upsertGroup(msg.group)
+	return tea.Batch(cmd, a.browser.activeStatus("updated "+msg.group.Name))
+}
+
+func (a *App) handleRunnerDone(msg runnerDoneMsg) tea.Cmd {
+	a.mode = modeBrowsing
+	if err := a.runner.finish(msg); err != nil {
+		a.err = err
+	} else {
+		a.err = nil
+	}
+	a.resizeChildren()
+	return nil
+}
+
+func (a *App) deleteLocalNode(index int) tea.Cmd {
+	local := a.localGroup()
+	if local == nil {
+		a.err = fmt.Errorf("local group not loaded")
+		return nil
+	}
+	if index < 0 || index >= len(local.data.Nodes) {
+		return nil
+	}
+
+	nodes := append(append([]string(nil), local.data.Nodes[:index]...), local.data.Nodes[index+1:]...)
+	return a.saveLocalNodes(nodes, "deleted local node")
+}
+
+func (a *App) replaceLocalNode(index int, value string) tea.Cmd {
+	defer func() {
+		a.editingNodeIndex = -1
+	}()
+
+	local := a.localGroup()
+	if local == nil {
+		a.err = fmt.Errorf("local group not loaded")
+		return nil
+	}
+	if index < 0 || index >= len(local.data.Nodes) {
+		return nil
+	}
+
+	nodes := append([]string(nil), local.data.Nodes...)
+	nodes[index] = value
+	return a.saveLocalNodes(nodes, "updated local node")
+}
+
+func (a *App) saveLocalNodes(nodes []string, status string) tea.Cmd {
+	if err := a.store.SaveLocal(nodes); err != nil {
+		a.err = err
+		return nil
+	}
+
+	a.err = nil
+	cmd := a.browser.updateLocalNodes(nodes)
+	return tea.Batch(cmd, a.browser.activeStatus(status))
+}
+
+func (a *App) localGroup() *group {
+	for i := range a.browser.groups {
+		if a.browser.groups[i].data.IsLocal() {
+			return &a.browser.groups[i]
 		}
 	}
-
-	if idx >= 0 {
-		a.groups[idx].data = gData
-		a.groups[idx].syncItems()
-	} else {
-		a.groups = append(a.groups, newGroup(gData, a.width, a.listHeight()))
-		idx = len(a.groups) - 1
-	}
-
-	a.tab = idx
-
-	if err := a.store.SaveGroup(gData); err != nil {
-		a.err = err
-	}
-
 	return nil
 }
 
-func (a *App) saveGroup(g *group) tea.Cmd {
-	if err := a.store.SaveGroup(g.data); err != nil {
-		a.err = err
+func (a *App) findGroup(name string) *group {
+	for i := range a.browser.groups {
+		if a.browser.groups[i].data.Name == name {
+			return &a.browser.groups[i]
+		}
 	}
 	return nil
 }
 
-// --- View ---
+func fetchRemoteCmd(client *http.Client, name, remoteURL string) tea.Cmd {
+	return func() tea.Msg {
+		req, err := http.NewRequest(http.MethodGet, remoteURL, nil)
+		if err != nil {
+			return fetchDoneMsg{err: fmt.Errorf("fetch %q: %w", name, err)}
+		}
 
-func (a *App) View() tea.View {
-	if a.width == 0 || a.height == 0 {
-		v := tea.NewView("")
-		v.AltScreen = true
-		return v
-	}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fetchDoneMsg{err: fmt.Errorf("fetch %q: %w", name, err)}
+		}
+		defer resp.Body.Close() //nolint:errcheck
 
-	var sections []string
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return fetchDoneMsg{err: fmt.Errorf("fetch %q: unexpected status %s", name, resp.Status)}
+		}
 
-	if g := a.activeGroup(); g != nil {
-		sections = append(sections, g.list.View())
-	}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fetchDoneMsg{err: fmt.Errorf("fetch %q: %w", name, err)}
+		}
 
-	if a.err != nil {
-		sections = append(sections, errStyle.Width(a.width).Render("Error: "+a.err.Error()))
-	}
+		decoded := sub.DecodeBody(body)
+		lines := splitLines(string(decoded))
+		if _, err := sub.Parse(strings.NewReader(string(decoded))); err != nil {
+			return fetchDoneMsg{err: fmt.Errorf("fetch %q: %w", name, err)}
+		}
 
-	if a.state == stateInputting {
-		sections = append(sections, a.input.View())
+		return fetchDoneMsg{
+			group: store.Group{
+				Name:  name,
+				Kind:  store.GroupKindRemote,
+				Nodes: lines,
+				URL:   strings.TrimSpace(remoteURL),
+			},
+		}
 	}
-
-	if a.state == stateRunning || len(a.runner.lines) > 0 {
-		sections = append(sections, logHeader.Width(a.width).Render("── sing-box ──"))
-		sections = append(sections, a.logView.View())
-	}
-
-	sections = append(sections, helpBar.Width(a.width).Render(a.helpText()))
-
-	view := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, sections...))
-	view.AltScreen = true
-	return view
-}
-
-
-func (a *App) helpText() string {
-	if a.state == stateInputting {
-		return "enter: confirm · esc: cancel"
-	}
-	if a.state == stateRunning {
-		return "q/esc: stop · tab/shift+tab: switch group"
-	}
-	g := a.activeGroup()
-	parts := []string{"↑↓: navigate", "/: filter", "tab: groups", "enter: connect", "n: new sub"}
-	if g != nil && !g.data.IsSubscription() {
-		parts = append(parts, "a: add", "e: edit", "d: del")
-	}
-	if g != nil && g.data.IsSubscription() {
-		parts = append(parts, "r: refresh")
-	}
-	if g != nil && g.data.Name != "manual" {
-		parts = append(parts, "D: del group")
-	}
-	parts = append(parts, "q: quit")
-	return strings.Join(parts, " · ")
 }
 
 func splitLines(s string) []string {
