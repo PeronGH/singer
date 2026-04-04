@@ -10,12 +10,13 @@ import (
 
 type runner struct {
 	cmd   *exec.Cmd
-	ch    <-chan tea.Msg
+	sub   chan tea.Msg // log line / done messages arrive here
 	lines []string
 }
 
-// start launches "sing-box run -c stdin" with configJSON piped to stdin.
-// It returns a tea.Cmd that reads the first log message.
+// start launches "sing-box run -c stdin", pipes configJSON to its stdin,
+// and begins streaming stdout/stderr to the sub channel.
+// Returns a batch: the producer goroutine and the first waitForLog.
 func (r *runner) start(configJSON []byte) tea.Cmd {
 	cmd := exec.Command("sing-box", "run", "-c", "stdin")
 
@@ -34,36 +35,40 @@ func (r *runner) start(configJSON []byte) tea.Cmd {
 		return done(err)
 	}
 
-	go func() {
-		_, _ = stdin.Write(configJSON)
-		_ = stdin.Close()
-	}()
-
-	ch := make(chan tea.Msg, 64)
-	go func() {
-		defer close(ch)
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			ch <- logLineMsg(scanner.Text())
-		}
-		ch <- runnerDoneMsg{cmd.Wait()}
-	}()
-
 	r.cmd = cmd
-	r.ch = ch
+	r.sub = make(chan tea.Msg, 64)
 	r.lines = nil
 
-	return r.waitNext()
+	return tea.Batch(
+		streamLogs(cmd, stdin, stdout, configJSON, r.sub),
+		waitForLog(r.sub),
+	)
 }
 
-// waitNext returns a Cmd that reads the next message from the channel.
-func (r *runner) waitNext() tea.Cmd {
-	ch := r.ch
-	if ch == nil {
-		return nil
-	}
+// streamLogs is the producer: writes config to stdin, then scans
+// stdout and sends each line to sub. Sends runnerDoneMsg when done.
+func streamLogs(cmd *exec.Cmd, stdin interface {
+	Write([]byte) (int, error)
+	Close() error
+}, stdout interface{ Read([]byte) (int, error) }, configJSON []byte, sub chan<- tea.Msg) tea.Cmd {
 	return func() tea.Msg {
-		msg, ok := <-ch
+		_, _ = stdin.Write(configJSON)
+		_ = stdin.Close()
+
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			sub <- logLineMsg(scanner.Text())
+		}
+		sub <- runnerDoneMsg{cmd.Wait()}
+		return nil // producer never returns a message directly
+	}
+}
+
+// waitForLog blocks until the next message arrives on sub.
+// Call this again from Update after each logLineMsg to keep streaming.
+func waitForLog(sub <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-sub
 		if !ok {
 			return runnerDoneMsg{}
 		}
@@ -79,8 +84,21 @@ func (r *runner) stop() {
 	}
 }
 
+// waitNext returns a Cmd to receive the next log message.
+func (r *runner) waitNext() tea.Cmd {
+	if r.sub == nil {
+		return nil
+	}
+	return waitForLog(r.sub)
+}
+
+const maxLogLines = 1000
+
 func (r *runner) appendLine(line string) {
 	r.lines = append(r.lines, line)
+	if len(r.lines) > maxLogLines {
+		r.lines = r.lines[len(r.lines)-maxLogLines:]
+	}
 }
 
 func (r *runner) logContent() string {

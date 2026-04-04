@@ -151,10 +151,11 @@ func (a *App) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	switch key {
-	case "q":
+	case "q", "escape":
 		if a.state == stateRunning {
 			a.runner.stop()
 			a.state = stateBrowsing
+			a.resizeChildren()
 			return nil
 		}
 		// Don't quit if the list is filtering.
@@ -179,7 +180,9 @@ func (a *App) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	if a.state == stateRunning {
-		return nil
+		var cmd tea.Cmd
+		a.logView, cmd = a.logView.Update(msg)
+		return cmd
 	}
 
 	return a.updateActiveList(msg)
@@ -471,7 +474,7 @@ func (a *App) helpText() string {
 		return "enter: confirm · esc: cancel"
 	}
 	if a.state == stateRunning {
-		return "q: stop · tab/shift+tab: switch group"
+		return "q/esc: stop · tab/shift+tab: switch group"
 	}
 	g := a.activeGroup()
 	parts := []string{"↑↓: navigate", "/: filter", "tab: groups", "enter: connect", "n: new sub"}
