@@ -1,6 +1,7 @@
 package sub
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -224,6 +225,24 @@ socks://10.0.0.1:1080#tag3
 	}
 	if outbounds[2].Type != C.TypeSOCKS {
 		t.Fatalf("[2] type = %q", outbounds[2].Type)
+	}
+}
+
+func TestParseBase64Encoded(t *testing.T) {
+	plain := "trojan://abc@example.com:443?security=tls&type=ws&path=/ws#tag1\nsocks://10.0.0.1:1080#tag2\n"
+	encoded := base64.StdEncoding.EncodeToString([]byte(plain))
+	outbounds, err := Parse(strings.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outbounds) != 2 {
+		t.Fatalf("got %d outbounds, want 2", len(outbounds))
+	}
+	if outbounds[0].Type != C.TypeTrojan {
+		t.Fatalf("[0] type = %q", outbounds[0].Type)
+	}
+	if outbounds[1].Type != C.TypeSOCKS {
+		t.Fatalf("[1] type = %q", outbounds[1].Type)
 	}
 }
 

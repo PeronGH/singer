@@ -2,6 +2,8 @@ package sub
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/url"
@@ -42,10 +44,18 @@ func ParseLine(line string) (option.Outbound, error) {
 }
 
 // Parse reads newline-separated URIs from r and returns all parsed Outbounds.
+// The input may be plain text or base64-encoded; encoding is auto-detected.
 // Blank lines are skipped.
 func Parse(r io.Reader) ([]option.Outbound, error) {
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+
+	data := decodeBase64(bytes.TrimSpace(raw))
+
 	var outbounds []option.Outbound
-	scanner := bufio.NewScanner(r)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -57,10 +67,18 @@ func Parse(r io.Reader) ([]option.Outbound, error) {
 		}
 		outbounds = append(outbounds, ob)
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
 	return outbounds, nil
+}
+
+// decodeBase64 tries to base64-decode data. If the decoded result
+// contains "://" (indicating protocol URIs), it returns the decoded bytes.
+// Otherwise it returns the original data unchanged.
+func decodeBase64(data []byte) []byte {
+	decoded, err := base64.StdEncoding.DecodeString(string(data))
+	if err == nil && bytes.Contains(decoded, []byte("://")) {
+		return decoded
+	}
+	return data
 }
 
 // serverOptions extracts server and port from a parsed URL.
