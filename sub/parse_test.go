@@ -1,0 +1,235 @@
+package sub
+
+import (
+	"strings"
+	"testing"
+
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/option"
+)
+
+func TestParseTrojan(t *testing.T) {
+	line := `trojan://testpass@example.com:443?security=tls&sni=example.com&fp=chrome&type=ws&host=example.com&path=%2Fws#Test-Trojan`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ob.Type != C.TypeTrojan {
+		t.Fatalf("type = %q, want %q", ob.Type, C.TypeTrojan)
+	}
+	if ob.Tag != "Test-Trojan" {
+		t.Fatalf("tag = %q, want %q", ob.Tag, "Test-Trojan")
+	}
+	opts := ob.Options.(*option.TrojanOutboundOptions)
+	if opts.Server != "example.com" || opts.ServerPort != 443 {
+		t.Fatalf("server = %s:%d", opts.Server, opts.ServerPort)
+	}
+	if opts.Password != "testpass" {
+		t.Fatalf("password = %q", opts.Password)
+	}
+	if opts.TLS == nil || !opts.TLS.Enabled {
+		t.Fatal("TLS not enabled")
+	}
+	if opts.TLS.ServerName != "example.com" {
+		t.Fatalf("sni = %q", opts.TLS.ServerName)
+	}
+	if opts.TLS.UTLS == nil || opts.TLS.UTLS.Fingerprint != "chrome" {
+		t.Fatal("utls fingerprint not set")
+	}
+	if opts.Transport == nil || opts.Transport.Type != C.V2RayTransportTypeWebsocket {
+		t.Fatal("transport not websocket")
+	}
+	if opts.Transport.WebsocketOptions.Path != "/ws" {
+		t.Fatalf("ws path = %q", opts.Transport.WebsocketOptions.Path)
+	}
+}
+
+func TestParseTrojanIPv6(t *testing.T) {
+	line := `trojan://testpass@[2001:db8::1]:443?security=tls&sni=example.com&fp=chrome&type=ws&host=example.com&path=%2Fws#Test-Trojan-v6`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ob.Options.(*option.TrojanOutboundOptions)
+	if opts.Server != "2001:db8::1" {
+		t.Fatalf("server = %q, want IPv6 address", opts.Server)
+	}
+}
+
+func TestParseTrojanInsecure(t *testing.T) {
+	line := `trojan://testpass@192.0.2.1:443?security=tls&sni=example.com&fp=chrome&allowInsecure=1&type=ws&host=example.com&path=%2Fws#Test-Insecure`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ob.Options.(*option.TrojanOutboundOptions)
+	if opts.TLS == nil || !opts.TLS.Insecure {
+		t.Fatal("TLS insecure not set")
+	}
+}
+
+func TestParseHysteria2(t *testing.T) {
+	line := `hy2://testpass@198.51.100.1:51419?sni=example.com&obfs=salamander&obfs-password=obfsecret#Test-Hy2`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ob.Type != C.TypeHysteria2 {
+		t.Fatalf("type = %q", ob.Type)
+	}
+	if ob.Tag != "Test-Hy2" {
+		t.Fatalf("tag = %q", ob.Tag)
+	}
+	opts := ob.Options.(*option.Hysteria2OutboundOptions)
+	if opts.Server != "198.51.100.1" || opts.ServerPort != 51419 {
+		t.Fatalf("server = %s:%d", opts.Server, opts.ServerPort)
+	}
+	if opts.Password != "testpass" {
+		t.Fatalf("password = %q", opts.Password)
+	}
+	if opts.TLS == nil || !opts.TLS.Enabled || opts.TLS.ServerName != "example.com" {
+		t.Fatal("TLS misconfigured")
+	}
+	if opts.Obfs == nil || opts.Obfs.Type != "salamander" || opts.Obfs.Password != "obfsecret" {
+		t.Fatal("obfs misconfigured")
+	}
+}
+
+func TestParseHTTPS(t *testing.T) {
+	line := `https://alice:s3cret@203.0.113.1?security=tls&sni=proxy.example.com#Test-HTTPS`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ob.Type != C.TypeHTTP {
+		t.Fatalf("type = %q", ob.Type)
+	}
+	if ob.Tag != "Test-HTTPS" {
+		t.Fatalf("tag = %q", ob.Tag)
+	}
+	opts := ob.Options.(*option.HTTPOutboundOptions)
+	if opts.ServerPort != 443 {
+		t.Fatalf("server_port = %d, want 443 (default for https)", opts.ServerPort)
+	}
+	if opts.Username != "alice" || opts.Password != "s3cret" {
+		t.Fatalf("auth = %s:%s", opts.Username, opts.Password)
+	}
+	if opts.TLS == nil || !opts.TLS.Enabled || opts.TLS.ServerName != "proxy.example.com" {
+		t.Fatal("TLS misconfigured")
+	}
+}
+
+func TestParseHTTP(t *testing.T) {
+	line := `http://bob:hunter2@proxy.example.com:2080#Test-HTTP`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ob.Type != C.TypeHTTP {
+		t.Fatalf("type = %q", ob.Type)
+	}
+	opts := ob.Options.(*option.HTTPOutboundOptions)
+	if opts.Server != "proxy.example.com" || opts.ServerPort != 2080 {
+		t.Fatalf("server = %s:%d", opts.Server, opts.ServerPort)
+	}
+	if opts.Username != "bob" || opts.Password != "hunter2" {
+		t.Fatalf("auth = %s:%s", opts.Username, opts.Password)
+	}
+	if opts.TLS != nil {
+		t.Fatal("TLS should not be set for http://")
+	}
+}
+
+func TestParseHTTPDefaultPort(t *testing.T) {
+	line := `http://192.168.1.1#Test-HTTP-DefaultPort`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ob.Options.(*option.HTTPOutboundOptions)
+	if opts.ServerPort != 80 {
+		t.Fatalf("server_port = %d, want 80 (default for http)", opts.ServerPort)
+	}
+}
+
+func TestParseHTTPNoAuth(t *testing.T) {
+	line := `http://192.168.1.1:1080#Test-HTTP-NoAuth`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ob.Options.(*option.HTTPOutboundOptions)
+	if opts.Username != "" || opts.Password != "" {
+		t.Fatalf("unexpected auth = %s:%s", opts.Username, opts.Password)
+	}
+}
+
+func TestParseSOCKS(t *testing.T) {
+	line := `socks://bob:hunter2@proxy.example.com:1080#Test-SOCKS`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ob.Type != C.TypeSOCKS {
+		t.Fatalf("type = %q", ob.Type)
+	}
+	opts := ob.Options.(*option.SOCKSOutboundOptions)
+	if opts.Username != "bob" || opts.Password != "hunter2" {
+		t.Fatalf("auth = %s:%s", opts.Username, opts.Password)
+	}
+}
+
+func TestParseSOCKSDefaultPort(t *testing.T) {
+	line := `socks://10.0.0.1#Test-SOCKS-DefaultPort`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ob.Options.(*option.SOCKSOutboundOptions)
+	if opts.ServerPort != 1080 {
+		t.Fatalf("server_port = %d, want 1080 (default for socks)", opts.ServerPort)
+	}
+}
+
+func TestParseSOCKSNoAuth(t *testing.T) {
+	line := `socks://10.0.0.1:1080#Test-SOCKS-NoAuth`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ob.Options.(*option.SOCKSOutboundOptions)
+	if opts.Username != "" || opts.Password != "" {
+		t.Fatalf("unexpected auth = %s:%s", opts.Username, opts.Password)
+	}
+}
+
+func TestParseMultiline(t *testing.T) {
+	input := `trojan://abc@example.com:443?security=tls&type=ws&path=/ws#tag1
+hy2://pass@example.com:8443?sni=example.com&obfs=salamander&obfs-password=secret#tag2
+
+socks://10.0.0.1:1080#tag3
+`
+	outbounds, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outbounds) != 3 {
+		t.Fatalf("got %d outbounds, want 3", len(outbounds))
+	}
+	if outbounds[0].Type != C.TypeTrojan {
+		t.Fatalf("[0] type = %q", outbounds[0].Type)
+	}
+	if outbounds[1].Type != C.TypeHysteria2 {
+		t.Fatalf("[1] type = %q", outbounds[1].Type)
+	}
+	if outbounds[2].Type != C.TypeSOCKS {
+		t.Fatalf("[2] type = %q", outbounds[2].Type)
+	}
+}
+
+func TestParseUnsupportedScheme(t *testing.T) {
+	_, err := ParseLine("vmess://something")
+	if err == nil {
+		t.Fatal("expected error for unsupported scheme")
+	}
+}
