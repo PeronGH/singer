@@ -2,14 +2,18 @@ package tui
 
 import (
 	"bufio"
+	"fmt"
 	"os/exec"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
-const maxLogLines = 1000
+const (
+	maxLogLines = 1000
+)
 
 type runnerModel struct {
 	cmd      *exec.Cmd
@@ -31,8 +35,11 @@ func (r *runnerModel) setSize(width, height int) {
 	r.logView.SetHeight(height)
 }
 
-func (r *runnerModel) hasOutput() bool {
-	return r.active || len(r.lines) > 0
+func (r *runnerModel) view() string {
+	if len(r.lines) == 0 {
+		return logEmpty.Width(r.logView.Width()).Render("No sing-box logs yet. Start a connection to stream output here.")
+	}
+	return r.logView.View()
 }
 
 func (r *runnerModel) start(configJSON []byte) tea.Cmd {
@@ -55,10 +62,9 @@ func (r *runnerModel) start(configJSON []byte) tea.Cmd {
 
 	r.cmd = cmd
 	r.sub = make(chan tea.Msg, 64)
-	r.lines = nil
-	r.logView.SetContent("")
 	r.active = true
 	r.stopping = false
+	r.appendStyledLine(logStart, "sing-box started")
 
 	return tea.Batch(
 		streamLogs(cmd, stdin, stdout, configJSON, r.sub),
@@ -82,16 +88,7 @@ func (r *runnerModel) stop() {
 }
 
 func (r *runnerModel) appendLine(line string) tea.Cmd {
-	r.lines = append(r.lines, line)
-	if len(r.lines) > maxLogLines {
-		r.lines = r.lines[len(r.lines)-maxLogLines:]
-	}
-
-	r.logView.SetContent(strings.Join(r.lines, "\n"))
-	if r.active {
-		r.logView.GotoBottom()
-	}
-
+	r.appendRawLine(line)
 	return waitForLog(r.sub)
 }
 
@@ -100,12 +97,32 @@ func (r *runnerModel) finish(msg runnerDoneMsg) error {
 	r.sub = nil
 	r.active = false
 
-	if r.stopping {
+	switch {
+	case r.stopping:
 		r.stopping = false
+		r.appendStyledLine(logStop, "sing-box stopped")
+		return nil
+	case msg.err != nil:
+		r.appendStyledLine(logStop, fmt.Sprintf("sing-box exited: %v", msg.err))
+		return msg.err
+	default:
+		r.appendStyledLine(logStop, "sing-box exited")
 		return nil
 	}
+}
 
-	return msg.err
+func (r *runnerModel) appendStyledLine(style lipgloss.Style, line string) {
+	r.appendRawLine(style.Render(line))
+}
+
+func (r *runnerModel) appendRawLine(line string) {
+	r.lines = append(r.lines, line)
+	if len(r.lines) > maxLogLines {
+		r.lines = r.lines[len(r.lines)-maxLogLines:]
+	}
+
+	r.logView.SetContent(strings.Join(r.lines, "\n"))
+	r.logView.GotoBottom()
 }
 
 func streamLogs(cmd *exec.Cmd, stdin interface {
@@ -121,6 +138,9 @@ func streamLogs(cmd *exec.Cmd, stdin interface {
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			sub <- logLineMsg(scanner.Text())
+		}
+		if err := scanner.Err(); err != nil {
+			sub <- logLineMsg(logStop.Render(fmt.Sprintf("log stream error: %v", err)))
 		}
 
 		sub <- runnerDoneMsg{err: cmd.Wait()}

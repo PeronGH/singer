@@ -9,6 +9,8 @@ import (
 )
 
 var stopKey = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop"))
+var nextTabKey = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next tab"))
+var prevTabKey = key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev tab"))
 
 func matchCtrlLetter(msg tea.KeyPressMsg, letter rune) bool {
 	key := msg.Key()

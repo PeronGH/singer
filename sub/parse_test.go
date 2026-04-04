@@ -246,6 +246,24 @@ func TestParseBase64Encoded(t *testing.T) {
 	}
 }
 
+func TestParseBodyReturnsLinesAndOutbounds(t *testing.T) {
+	body := []byte("trojan://abc@example.com:443?security=tls&type=ws&path=/ws#tag1\nsocks://10.0.0.1:1080#tag2\n")
+
+	lines, outbounds, err := ParseBody(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want 2", len(lines))
+	}
+	if lines[0] != "trojan://abc@example.com:443?security=tls&type=ws&path=/ws#tag1" {
+		t.Fatalf("unexpected first line %q", lines[0])
+	}
+	if len(outbounds) != 2 {
+		t.Fatalf("got %d outbounds, want 2", len(outbounds))
+	}
+}
+
 func TestParseTrojanGRPCTransport(t *testing.T) {
 	line := `trojan://testpass@example.com:443?security=tls&type=grpc&serviceName=mygrpc#Test-GRPC`
 	ob, err := ParseLine(line)

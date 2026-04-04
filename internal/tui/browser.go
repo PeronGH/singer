@@ -39,23 +39,13 @@ type browserModel struct {
 }
 
 var (
-	groupNextKey  = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next group"))
-	groupPrevKey  = key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev group"))
-	connectKey    = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "connect"))
-	addRemoteKey  = key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new remote"))
-	refreshAllKey = key.NewBinding(
-		key.WithKeys("R"),
-		key.WithHelp("R", "refresh all"),
-	)
+	connectKey      = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "connect"))
+	refreshAllKey   = key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "refresh all"))
 	addLocalKey     = key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add node"))
-	editLocalKey    = key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit node"))
-	deleteLocalKey  = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete node"))
-	refreshKey      = key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh"))
 	deleteRemoteKey = key.NewBinding(
 		key.WithKeys("D"),
 		key.WithHelp("D", "delete remote"),
 	)
-	quitKey = key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit"))
 )
 
 func newBrowser(groups []store.Group, width, height int) browserModel {
@@ -66,7 +56,6 @@ func newBrowser(groups []store.Group, width, height int) browserModel {
 	}
 	for i, g := range groups {
 		b.groups[i] = newGroup(g, width, height)
-		b.bindHelp(i)
 	}
 	return b
 }
@@ -109,15 +98,6 @@ func (b *browserModel) activeStatus(message string) tea.Cmd {
 	return g.list.NewStatusMessage(message)
 }
 
-func (b *browserModel) hasRemoteGroups() bool {
-	for _, g := range b.groups {
-		if g.data.IsRemote() {
-			return true
-		}
-	}
-	return false
-}
-
 func (b *browserModel) remoteGroups() []store.Group {
 	remotes := make([]store.Group, 0, len(b.groups))
 	for _, g := range b.groups {
@@ -126,13 +106,6 @@ func (b *browserModel) remoteGroups() []store.Group {
 		}
 	}
 	return remotes
-}
-
-func (b *browserModel) cycleTab(delta int) {
-	if len(b.groups) == 0 {
-		return
-	}
-	b.tab = (b.tab + delta + len(b.groups)) % len(b.groups)
 }
 
 func (b *browserModel) update(msg tea.Msg) (browserAction, tea.Cmd) {
@@ -149,12 +122,6 @@ func (b *browserModel) update(msg tea.Msg) (browserAction, tea.Cmd) {
 
 	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch {
-		case key.Matches(msg, groupNextKey):
-			b.cycleTab(1)
-			return browserAction{}, nil
-		case key.Matches(msg, groupPrevKey):
-			b.cycleTab(-1)
-			return browserAction{}, nil
 		case key.Matches(msg, connectKey):
 			idx, ok := b.selectedNodeIndex(g)
 			if !ok {
@@ -171,7 +138,7 @@ func (b *browserModel) update(msg tea.Msg) (browserAction, tea.Cmd) {
 			return browserAction{Kind: browserActionRefreshAll}, nil
 		case matchLetter(msg, 'q'):
 			return browserAction{Kind: browserActionQuit}, nil
-		case matchLetter(msg, 'a') && g.data.IsLocal():
+		case key.Matches(msg, addLocalKey) && g.data.IsLocal():
 			return browserAction{Kind: browserActionAddLocalNode}, nil
 		case matchLetter(msg, 'e') && g.data.IsLocal():
 			idx, ok := b.selectedNodeIndex(g)
@@ -267,7 +234,6 @@ func (b *browserModel) updateLocalNodes(nodes []string) tea.Cmd {
 
 		b.groups[i].data.Nodes = append([]string(nil), nodes...)
 		cmd := b.groups[i].syncItems()
-		b.bindHelp(i)
 		b.tab = i
 		return cmd
 	}
@@ -292,7 +258,6 @@ func (b *browserModel) sortGroups() {
 	})
 
 	for i := range b.groups {
-		b.bindHelp(i)
 		if b.groups[i].data.Name == activeName {
 			b.tab = i
 		}
@@ -308,47 +273,4 @@ func (b *browserModel) selectedNodeIndex(g *group) (int, bool) {
 		return 0, false
 	}
 	return idx, true
-}
-
-func (b *browserModel) bindHelp(idx int) {
-	if idx < 0 || idx >= len(b.groups) {
-		return
-	}
-
-	groupKind := b.groups[idx].data.Kind
-	b.groups[idx].list.AdditionalShortHelpKeys = func() []key.Binding {
-		return shortHelpForGroup(groupKind)
-	}
-	b.groups[idx].list.AdditionalFullHelpKeys = func() []key.Binding {
-		return fullHelpForGroup(groupKind)
-	}
-}
-
-func shortHelpForGroup(kind store.GroupKind) []key.Binding {
-	keys := []key.Binding{groupNextKey, connectKey, addRemoteKey, refreshAllKey}
-	switch kind {
-	case store.GroupKindLocal:
-		keys = append(keys, addLocalKey, deleteLocalKey, quitKey)
-	case store.GroupKindRemote:
-		keys = append(keys, refreshKey, deleteRemoteKey, quitKey)
-	}
-	return keys
-}
-
-func fullHelpForGroup(kind store.GroupKind) []key.Binding {
-	keys := []key.Binding{
-		groupNextKey,
-		groupPrevKey,
-		connectKey,
-		addRemoteKey,
-		refreshAllKey,
-		quitKey,
-	}
-	switch kind {
-	case store.GroupKindLocal:
-		keys = append(keys, addLocalKey, editLocalKey, deleteLocalKey)
-	case store.GroupKindRemote:
-		keys = append(keys, refreshKey, deleteRemoteKey)
-	}
-	return keys
 }

@@ -43,6 +43,39 @@ func ParseLine(line string) (option.Outbound, error) {
 	}
 }
 
+// ParseBody decodes and parses a subscription payload, returning the normalized
+// input lines and the parsed outbounds.
+func ParseBody(raw []byte) ([]string, []option.Outbound, error) {
+	data := DecodeBody(bytes.TrimSpace(raw))
+
+	lines := make([]string, 0, strings.Count(string(data), "\n")+1)
+	outbounds := make([]option.Outbound, 0, len(lines))
+
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		ob, err := ParseLine(line)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parsing %q: %w", line, err)
+		}
+		if ob.Tag == "" {
+			ob.Tag = strconv.Itoa(len(outbounds))
+		}
+
+		lines = append(lines, line)
+		outbounds = append(outbounds, ob)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	return lines, outbounds, nil
+}
+
 // Parse reads newline-separated URIs from r and returns all parsed Outbounds.
 // The input may be plain text or base64-encoded; encoding is auto-detected.
 // Blank lines are skipped.
@@ -52,25 +85,8 @@ func Parse(r io.Reader) ([]option.Outbound, error) {
 		return nil, err
 	}
 
-	data := DecodeBody(bytes.TrimSpace(raw))
-
-	var outbounds []option.Outbound
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		ob, err := ParseLine(line)
-		if err != nil {
-			return nil, fmt.Errorf("parsing %q: %w", line, err)
-		}
-		if ob.Tag == "" {
-			ob.Tag = strconv.Itoa(len(outbounds))
-		}
-		outbounds = append(outbounds, ob)
-	}
-	return outbounds, nil
+	_, outbounds, err := ParseBody(raw)
+	return outbounds, err
 }
 
 // DecodeBody tries to base64-decode data. If the decoded result

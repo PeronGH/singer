@@ -53,6 +53,7 @@ func newGroup(g store.Group, width, height int) group {
 	l.Title = titleForGroup(g)
 	l.SetShowHelp(false)
 	l.SetShowStatusBar(false)
+	l.SetShowTitle(false)
 	l.DisableQuitKeybindings()
 
 	return group{data: g, list: l}

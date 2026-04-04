@@ -2,7 +2,9 @@ package tui
 
 import (
 	"errors"
+	"net/http"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -102,9 +104,7 @@ func TestRunnerFinishSuppressesIntentionalStopErrors(t *testing.T) {
 }
 
 func TestQuestionMarkTogglesHelpScreen(t *testing.T) {
-	app := &App{
-		browser: newBrowser([]store.Group{{Name: "local", Kind: store.GroupKindLocal}}, 80, 20),
-	}
+	app := testApp()
 
 	if _, _ = app.Update(keyPress(tea.Key{Text: "?", Code: '?'})); !app.helpVisible {
 		t.Fatal("help screen should open")
@@ -116,10 +116,8 @@ func TestQuestionMarkTogglesHelpScreen(t *testing.T) {
 }
 
 func TestHelpScreenInterceptsQuitKey(t *testing.T) {
-	app := &App{
-		helpVisible: true,
-		browser:     newBrowser([]store.Group{{Name: "local", Kind: store.GroupKindLocal}}, 80, 20),
-	}
+	app := testApp()
+	app.helpVisible = true
 
 	model, cmd := app.Update(keyPress(tea.Key{Text: "q", Code: 'q'}))
 	if model == nil {
@@ -131,6 +129,71 @@ func TestHelpScreenInterceptsQuitKey(t *testing.T) {
 	if !app.helpVisible {
 		t.Fatal("help screen should remain visible")
 	}
+}
+
+func TestAppCycleTabsIncludesLogs(t *testing.T) {
+	app := testApp()
+	app.browser.upsertGroup(store.Group{Name: "remote", Kind: store.GroupKindRemote})
+	app.browser.tab = 0
+
+	app.cycleTabs(1)
+	if app.activeTab != tabGroups || app.browser.tab != 1 {
+		t.Fatalf("expected remote tab, got active=%v tab=%d", app.activeTab, app.browser.tab)
+	}
+
+	app.cycleTabs(1)
+	if app.activeTab != tabLogs {
+		t.Fatalf("expected logs tab, got %v", app.activeTab)
+	}
+
+	app.cycleTabs(1)
+	if app.activeTab != tabGroups || app.browser.tab != 0 {
+		t.Fatalf("expected local tab after logs, got active=%v tab=%d", app.activeTab, app.browser.tab)
+	}
+}
+
+func TestLogsTabOwnsNavigationInput(t *testing.T) {
+	app := testApp()
+	app.browser.activeGroup().data.Nodes = []string{
+		"socks://10.0.0.1:1080#a",
+		"socks://10.0.0.2:1080#b",
+	}
+	if cmd := app.browser.activeGroup().syncItems(); cmd != nil {
+		_ = cmd()
+	}
+	app.browser.setSize(80, 10)
+	app.runner.setSize(80, 3)
+	for i := 0; i < 10; i++ {
+		app.runner.appendRawLine("line")
+	}
+
+	app.activeTab = tabLogs
+	if _, _ = app.Update(keyPress(tea.Key{Code: tea.KeyDown})); app.browser.activeGroup().list.Index() != 0 {
+		t.Fatal("group selection should not move while logs tab is active")
+	}
+}
+
+func testApp() *App {
+	groups := []store.Group{{
+		Name: "local",
+		Kind: store.GroupKindLocal,
+		Nodes: []string{
+			"socks://10.0.0.1:1080#alpha",
+		},
+	}}
+
+	app := &App{
+		client:    &http.Client{Timeout: time.Second},
+		browser:   newBrowser(groups, 80, 20),
+		prompt:    newPrompt(80),
+		runner:    newRunner(),
+		activeTab: tabGroups,
+		mode:      modeBrowsing,
+		width:     80,
+		height:    24,
+	}
+	app.resizeChildren()
+	return app
 }
 
 func keyPress(k tea.Key) tea.KeyPressMsg {
