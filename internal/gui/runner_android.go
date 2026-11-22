@@ -14,6 +14,8 @@ import (
 	"github.com/PeronGH/singer/internal/androidvpn"
 )
 
+const defaultTunMode = true
+
 func defaultLookPath(string) (string, error) {
 	return "", nil
 }

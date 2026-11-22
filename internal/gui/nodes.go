@@ -21,39 +21,61 @@ func (a *App) groupView(c *ui.Context, g *store.Group) {
 	var deleteIdx = -1
 	var stopRequested bool
 
-	ui.Column(c).Fill().Padding(16, 20).Gap(12).Children(func() {
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-				ui.Text(c, groupName).FontSize(18).Bold().SingleLine()
-				if isRemote && remoteURL != "" {
-					ui.Text(c, remoteURL).FontSize(12).TextColor(t.TextMuted).SingleLine()
+	compact := isCompact(c)
+	renderGroupActions := func() {
+		if isLocal {
+			if ui.PrimaryButton(c, "Add Node").Clicked() {
+				a.openAddLocalNodeModal()
+			}
+		}
+		if isRemote {
+			refreshLabel := "Refresh"
+			if a.fetching[groupName] {
+				refreshLabel = "Refreshing…"
+			}
+			if ui.Button(c, refreshLabel).Disabled(a.fetching[groupName]).Clicked() {
+				a.startFetchRemote(groupName, remoteURL)
+			}
+			if len(a.remoteGroups()) > 1 {
+				if ui.Button(c, "Refresh All").Clicked() {
+					a.refreshAllRemotes()
 				}
-			})
+			}
+			if ui.Button(c, "Delete").Label("Delete remote " + groupName).Clicked() {
+				a.confirmDeleteRemoteName = groupName
+				a.confirmDeleteRemoteOpen = true
+			}
+		}
+	}
 
-			if isLocal {
-				if ui.PrimaryButton(c, "Add Node").Clicked() {
-					a.openAddLocalNodeModal()
-				}
-			}
-			if isRemote {
-				refreshLabel := "Refresh"
-				if a.fetching[groupName] {
-					refreshLabel = "Refreshing…"
-				}
-				if ui.Button(c, refreshLabel).Disabled(a.fetching[groupName]).Clicked() {
-					a.startFetchRemote(groupName, remoteURL)
-				}
-				if len(a.remoteGroups()) > 1 {
-					if ui.Button(c, "Refresh All").Clicked() {
-						a.refreshAllRemotes()
+	root := ui.Column(c).Fill().Gap(12)
+	if compact {
+		root.Padding(12)
+	} else {
+		root.Padding(16, 20)
+	}
+	root.Children(func() {
+		if compact {
+			ui.Column(c).Gap(8).Children(func() {
+				ui.Column(c).MinWidth(0).Gap(2).Children(func() {
+					ui.Text(c, groupName).FontSize(18).Bold().SingleLine()
+					if isRemote && remoteURL != "" {
+						ui.Text(c, remoteURL).FontSize(12).TextColor(t.TextMuted).SingleLine()
 					}
-				}
-				if ui.Button(c, "Delete").Label("Delete remote " + groupName).Clicked() {
-					a.confirmDeleteRemoteName = groupName
-					a.confirmDeleteRemoteOpen = true
-				}
-			}
-		})
+				})
+				ui.Row(c).Gap(6).Wrap().AlignItems(ui.Center).Children(renderGroupActions)
+			})
+		} else {
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+					ui.Text(c, groupName).FontSize(18).Bold().SingleLine()
+					if isRemote && remoteURL != "" {
+						ui.Text(c, remoteURL).FontSize(12).TextColor(t.TextMuted).SingleLine()
+					}
+				})
+				renderGroupActions()
+			})
+		}
 
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			if ui.SearchField(c.Key("filter-"+groupName), &a.query).
@@ -91,11 +113,19 @@ func (a *App) groupView(c *ui.Context, g *store.Group) {
 					mutedColor = t.AccentText.Alpha(0.8)
 				}
 
-				rowBox := ui.Row(row.Context).
-					Padding(10, 12).
-					Gap(10).
-					AlignItems(ui.Center).
-					FillWidth()
+				var rowBox ui.Element
+				if compact {
+					rowBox = ui.Column(row.Context).
+						Padding(10, 10).
+						Gap(8).
+						FillWidth()
+				} else {
+					rowBox = ui.Row(row.Context).
+						Padding(10, 12).
+						Gap(10).
+						AlignItems(ui.Center).
+						FillWidth()
+				}
 
 				if rowBox.RowDoubleClicked() {
 					connectIdx = entry.Index
@@ -127,17 +157,7 @@ func (a *App) groupView(c *ui.Context, g *store.Group) {
 					}
 				})
 
-				rowBox.Children(func() {
-					ui.Column(row.Context).Grow(1).MinWidth(0).Gap(2).Children(func() {
-						ui.Row(row.Context).Gap(8).AlignItems(ui.Center).Children(func() {
-							ui.Text(row.Context, entry.Tag).Bold().TextColor(textColor).SingleLine()
-							if active {
-								ui.Badge(row.Context, "Active").Background(t.Success).TextColor(t.AccentText)
-							}
-						})
-						ui.Text(row.Context, entry.Desc).FontSize(12).TextColor(mutedColor).SingleLine()
-					})
-
+				renderRowActions := func() {
 					if active {
 						ui.Button(row.Context, "Stop").
 							Label("Stop " + entry.Tag).
@@ -158,6 +178,28 @@ func (a *App) groupView(c *ui.Context, g *store.Group) {
 						ui.Button(row.Context, "Delete").
 							Label("Delete " + entry.Tag).
 							OnClick(func() { a.deleteLocalNode(idx) })
+					}
+				}
+
+				rowBox.Children(func() {
+					info := ui.Column(row.Context).MinWidth(0).Gap(2)
+					if !compact {
+						info.Grow(1)
+					}
+					info.Children(func() {
+						ui.Row(row.Context).Gap(8).AlignItems(ui.Center).Children(func() {
+							ui.Text(row.Context, entry.Tag).Bold().TextColor(textColor).SingleLine()
+							if active {
+								ui.Badge(row.Context, "Active").Background(t.Success).TextColor(t.AccentText)
+							}
+						})
+						ui.Text(row.Context, entry.Desc).FontSize(12).TextColor(mutedColor).SingleLine()
+					})
+
+					if compact {
+						ui.Row(row.Context).Gap(6).Wrap().AlignItems(ui.Center).Children(renderRowActions)
+					} else {
+						renderRowActions()
 					}
 				})
 			})

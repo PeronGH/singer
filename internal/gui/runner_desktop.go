@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const defaultTunMode = false
+
 var defaultLookPath = exec.LookPath
 
 type execProcess struct {

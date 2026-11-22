@@ -527,11 +527,24 @@ func TestCompactMobileLayout(t *testing.T) {
 	app, _, _ := newTestApp(t, []string{
 		"socks://10.0.0.1:1080#alpha",
 	}, withProcessStarter(starter))
-	tt := ui.NewTester(app.View, 390, 844)
+	const narrowW = 360
+	tt := ui.NewTester(app.View, narrowW, 740)
 
 	if !tt.HasText("alpha") || !tt.HasText("Disconnected") {
 		t.Fatalf("expected compact mobile view with alpha, texts=%q", tt.Texts())
 	}
+
+	// Open Add Node modal at 360px width and verify its primary button fits within the viewport.
+	if err := tt.Click("Add Node"); err != nil {
+		t.Fatalf("click Add Node: %v", err)
+	}
+	if btn, ok := tt.AccessByRole(ui.RoleButton, "Add"); !ok || btn.Bounds.X < 0 || btn.Bounds.X+btn.Bounds.W > narrowW {
+		t.Fatalf("Add button out of 360px bounds: ok=%v bounds=%+v", ok, btn.Bounds)
+	}
+	if err := tt.Click("Cancel"); err != nil {
+		t.Fatalf("click Cancel: %v", err)
+	}
+
 	if err := tt.Click("TUN"); err != nil {
 		t.Fatalf("click TUN: %v", err)
 	}
@@ -542,8 +555,13 @@ func TestCompactMobileLayout(t *testing.T) {
 		t.Fatalf("expected TUN connect on mobile layout, startedTun=%v nav=%q", startedTun, app.selectedNav)
 	}
 	for _, a := range tt.AccessAll() {
-		if a.Role == ui.RoleButton && a.Name == "" {
-			t.Errorf("mobile layout: button at %v has empty accessible name", a.Bounds)
+		if a.Role == ui.RoleButton {
+			if a.Name == "" {
+				t.Errorf("mobile layout: button at %v has empty accessible name", a.Bounds)
+			}
+			if a.Bounds.W > 0 && a.Bounds.X+a.Bounds.W > narrowW+1 {
+				t.Errorf("mobile layout: button %q overflows %dpx width: %+v", a.Name, narrowW, a.Bounds)
+			}
 		}
 	}
 }

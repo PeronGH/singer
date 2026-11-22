@@ -2,7 +2,6 @@ package gui
 
 import (
 	"net/http"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -142,7 +141,7 @@ func New(s *store.Store, opts ...Option) (*App, error) {
 		editingNodeIndex: -1,
 		runner:           newRunner(nil),
 		logList:          ui.ListState{FollowEnd: true},
-		tunMode:          runtime.GOOS == "android",
+		tunMode:          defaultTunMode,
 		fetching:         make(map[string]bool),
 	}
 	for _, opt := range opts {
@@ -182,7 +181,7 @@ func (a *App) View(c *ui.Context) {
 		a.nodeList = ui.ListState{}
 	}
 
-	if w, _ := c.Size(); w > 0 && w < compactWidthBreakpoint {
+	if isCompact(c) {
 		a.compactView(c)
 	} else {
 		ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {

@@ -8,6 +8,19 @@ import (
 
 const compactWidthBreakpoint = 640
 
+func isCompact(c *ui.Context) bool {
+	w, _ := c.Size()
+	return w > 0 && w < compactWidthBreakpoint
+}
+
+func dialogWidth(c *ui.Context, maxW float32) float32 {
+	w, _ := c.Size()
+	if w <= 0 {
+		return maxW
+	}
+	return min(max(w-64, 240), maxW)
+}
+
 func (a *App) compactView(c *ui.Context) {
 	t := c.Theme()
 

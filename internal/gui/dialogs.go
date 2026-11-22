@@ -16,7 +16,7 @@ func (a *App) dialogsView(c *ui.Context) {
 
 func (a *App) addRemoteDialogView(c *ui.Context) {
 	ui.Modal(c, &a.remoteModalOpen, func() {
-		ui.Column(c).Width(420).Gap(12).Children(func() {
+		ui.Column(c).Width(dialogWidth(c, 420)).Gap(12).Children(func() {
 			ui.Text(c, "Add Remote Subscription").FontSize(16).Bold()
 
 			submit := false
@@ -43,7 +43,7 @@ func (a *App) addRemoteDialogView(c *ui.Context) {
 				}
 			}).Error(a.remoteURLErr)
 
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			ui.Row(c).Gap(8).Justify(ui.End).Wrap().Children(func() {
 				if ui.Button(c, "Cancel").Clicked() {
 					a.remoteModalOpen = false
 				}
@@ -82,7 +82,7 @@ func (a *App) localNodeDialogView(c *ui.Context) {
 			actionLabel = "Save"
 		}
 
-		ui.Column(c).Width(460).Gap(12).Children(func() {
+		ui.Column(c).Width(dialogWidth(c, 460)).Gap(12).Children(func() {
 			ui.Text(c, title).FontSize(16).Bold()
 
 			submit := false
@@ -98,7 +98,7 @@ func (a *App) localNodeDialogView(c *ui.Context) {
 				}
 			}).Error(a.nodeURIErr)
 
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			ui.Row(c).Gap(8).Justify(ui.End).Wrap().Children(func() {
 				if ui.Button(c, "Cancel").Clicked() {
 					a.nodeModalOpen = false
 					a.editingNodeIndex = -1

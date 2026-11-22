@@ -9,35 +9,61 @@ import (
 func (a *App) logsView(c *ui.Context) {
 	t := c.Theme()
 	lines := a.runner.lines
+	compact := isCompact(c)
 
-	ui.Column(c).Fill().Padding(16, 20).Gap(12).Children(func() {
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Logs").FontSize(18).Bold()
-			if a.runner.active {
-				ui.Badge(c, fmt.Sprintf("Running · %s", a.runner.activeTag)).
-					Background(t.Success).
-					TextColor(t.AccentText)
-			} else {
-				ui.Badge(c, "Stopped")
+	renderActions := func() {
+		if len(lines) > 0 && !a.logList.AtEnd() {
+			if ui.Button(c, "Jump to Bottom").Clicked() {
+				a.logList.ScrollToEnd()
 			}
-			ui.Spacer(c)
+		}
+		if ui.Button(c, "Copy All").Disabled(len(lines) == 0).Clicked() {
+			c.Services().WriteClipboard(a.runner.allText())
+			c.Toast("Copied logs")
+		}
+		if ui.Button(c, "Clear").Disabled(len(lines) == 0).Clicked() {
+			a.runner.clear()
+		}
+		if ui.Button(c, "Stop").Label("Stop sing-box").Disabled(!a.runner.active).Clicked() {
+			a.stopRunner()
+		}
+	}
 
-			if len(lines) > 0 && !a.logList.AtEnd() {
-				if ui.Button(c, "Jump to Bottom").Clicked() {
-					a.logList.ScrollToEnd()
+	root := ui.Column(c).Fill().Gap(12)
+	if compact {
+		root.Padding(12)
+	} else {
+		root.Padding(16, 20)
+	}
+	root.Children(func() {
+		if compact {
+			ui.Column(c).Gap(8).Children(func() {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "Logs").FontSize(18).Bold()
+					if a.runner.active {
+						ui.Badge(c, fmt.Sprintf("Running · %s", a.runner.activeTag)).
+							Background(t.Success).
+							TextColor(t.AccentText)
+					} else {
+						ui.Badge(c, "Stopped")
+					}
+				})
+				ui.Row(c).Gap(6).Wrap().AlignItems(ui.Center).Children(renderActions)
+			})
+		} else {
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Logs").FontSize(18).Bold()
+				if a.runner.active {
+					ui.Badge(c, fmt.Sprintf("Running · %s", a.runner.activeTag)).
+						Background(t.Success).
+						TextColor(t.AccentText)
+				} else {
+					ui.Badge(c, "Stopped")
 				}
-			}
-			if ui.Button(c, "Copy All").Disabled(len(lines) == 0).Clicked() {
-				c.Services().WriteClipboard(a.runner.allText())
-				c.Toast("Copied logs")
-			}
-			if ui.Button(c, "Clear").Disabled(len(lines) == 0).Clicked() {
-				a.runner.clear()
-			}
-			if ui.Button(c, "Stop").Label("Stop sing-box").Disabled(!a.runner.active).Clicked() {
-				a.stopRunner()
-			}
-		})
+				ui.Spacer(c)
+				renderActions()
+			})
+		}
 
 		a.errorBannerView(c)
 
@@ -105,7 +131,7 @@ func (a *App) metricsBarView(c *ui.Context) {
 		memVal = formatBytes(int64(m.memory))
 	}
 
-	if w, _ := c.Size(); w > 0 && w < compactWidthBreakpoint {
+	if isCompact(c) {
 		ui.Column(c).Gap(8).Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
 				card("Download", downVal, downSub)

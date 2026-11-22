@@ -67,8 +67,8 @@ func main() {
 			Title:     "Singer",
 			Width:     960,
 			Height:    640,
-			MinWidth:  640,
-			MinHeight: 420,
+			MinWidth:  360,
+			MinHeight: 400,
 			StateKey:  "main",
 			Content:   ui.View(app.View),
 		})
