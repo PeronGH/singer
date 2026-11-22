@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,9 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
+
+//go:embed assets/icon.png
+var appIconPNG []byte
 
 func main() {
 	var app *gui.App
@@ -72,6 +76,10 @@ func main() {
 			StateKey:  "main",
 			Content:   ui.View(app.View),
 		})
+		if runtime.GOOS != "android" {
+			_ = win.SetIcon(appIconPNG)
+			_ = mygo.App.Dock.SetIcon(appIconPNG)
+		}
 		app.AttachWindow(win)
 	})
 

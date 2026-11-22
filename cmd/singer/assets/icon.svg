@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#172554"/>
+    </linearGradient>
+    <linearGradient id="wingTop" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#5EEAD4"/>
+    </linearGradient>
+    <linearGradient id="wingSide" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#0EA5E9"/>
+    </linearGradient>
+    <linearGradient id="wingFold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F766E"/>
+      <stop offset="100%" stop-color="#1E3A8A"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="24" y="24" width="464" height="464" rx="112" fill="url(#bg)"/>
+  <rect x="26" y="26" width="460" height="460" rx="110" fill="none" stroke="#1E3A8A" stroke-width="4" stroke-opacity="0.7"/>
+
+  <path d="M 110 318 A 104 104 0 0 0 194 402" fill="none" stroke="#38BDF8" stroke-width="14" stroke-linecap="round" stroke-opacity="0.35"/>
+  <path d="M 144 294 A 70 70 0 0 0 218 368" fill="none" stroke="#5EEAD4" stroke-width="14" stroke-linecap="round" stroke-opacity="0.65"/>
+
+  <polygon points="108,224 394,118 232,262" fill="url(#wingTop)"/>
+  <polygon points="232,262 394,118 258,318" fill="url(#wingFold)"/>
+  <polygon points="258,318 286,284 232,262" fill="#0C4A6E"/>
+  <polygon points="258,318 394,118 318,388" fill="url(#wingSide)"/>
+</svg>

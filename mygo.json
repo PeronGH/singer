@@ -1,8 +1,9 @@
 {
   "name": "Singer",
   "slug": "singer",
-  "identifier": "com.perongh.singer",
+  "identifier": "uk.ihack.singer",
   "version": "0.1.0",
+  "icon": "cmd/singer/assets/icon.png",
   "main": "./cmd/singer",
   "out": "build",
   "linux": {
@@ -10,6 +11,11 @@
   },
   "android": {
     "minSdk": 26,
+    "splash": "#0F172A",
+    "adaptiveIcon": {
+      "foreground": "cmd/singer/assets/icon-foreground.png",
+      "background": "#0F172A"
+    },
     "permissions": [
       "FOREGROUND_SERVICE",
       "FOREGROUND_SERVICE_SPECIAL_USE"
