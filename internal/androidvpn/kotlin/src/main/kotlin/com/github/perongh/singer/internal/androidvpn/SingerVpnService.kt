@@ -122,15 +122,6 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
                 val apiAddr = intent.getStringExtra(EXTRA_API_ADDR) ?: ""
                 val apiSecret = intent.getStringExtra(EXTRA_API_SECRET) ?: ""
                 promoteForeground(nodeTag, tunMode)
-                val session = LastSession(
-                    configJSON = config,
-                    tunMode = tunMode,
-                    groupName = groupName,
-                    nodeTag = nodeTag,
-                    nodeIndex = nodeIndex,
-                    apiAddr = apiAddr,
-                    apiSecret = apiSecret,
-                )
                 val baseSnapshot = VpnSnapshot(
                     state = VpnIpc.STATE_STARTING,
                     runId = runId,
@@ -144,7 +135,6 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
                 publishState(baseSnapshot)
                 worker.execute {
                     try {
-                        LastSessionStore.write(this, session)
                         startLibbox(config)
                         publishState(baseSnapshot.copy(state = VpnIpc.STATE_RUNNING))
                     } catch (e: Throwable) {
