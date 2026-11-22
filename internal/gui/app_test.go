@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -61,6 +62,7 @@ func newTestApp(t *testing.T, nodes []string, opts ...Option) (*App, *store.Stor
 	events := make(chan func(), 32)
 	allOpts := append([]Option{
 		WithDispatcher(func(fn func()) { events <- fn }),
+		withLookPath(func(string) (string, error) { return "/usr/bin/sing-box", nil }),
 	}, opts...)
 	app, err := New(s, allOpts...)
 	if err != nil {
@@ -319,4 +321,47 @@ func TestAccessibilityAllButtonsNamed(t *testing.T) {
 		t.Fatalf("click Logs: %v", err)
 	}
 	checkButtons("logs")
+}
+
+func TestMissingSingBoxShowsBlockingScreen(t *testing.T) {
+	available := false
+	app, _, _ := newTestApp(t, []string{
+		"socks://10.0.0.1:1080#alpha",
+	}, withLookPath(func(file string) (string, error) {
+		if !available {
+			return "", &exec.Error{Name: file, Err: exec.ErrNotFound}
+		}
+		return "/usr/bin/sing-box", nil
+	}))
+	tt := ui.NewTester(app.View, 960, 640)
+
+	if !tt.HasText("sing-box not found") {
+		t.Fatalf("expected blocking screen, texts=%q", tt.Texts())
+	}
+	if tt.HasText("Add Node") || tt.HasText("alpha") {
+		t.Fatalf("main UI should be blocked while sing-box is missing, texts=%q", tt.Texts())
+	}
+
+	tt.Key(ui.Cmd, ui.KeyN)
+	if app.remoteModalOpen {
+		t.Fatal("global shortcuts should be blocked while sing-box is missing")
+	}
+
+	for _, a := range tt.AccessAll() {
+		if a.Role == ui.RoleButton && a.Name == "" {
+			t.Errorf("blocking screen: button at %v has empty accessible name", a.Bounds)
+		}
+	}
+
+	available = true
+	if err := tt.Click("Check Again"); err != nil {
+		t.Fatalf("click Check Again: %v", err)
+	}
+
+	if tt.HasText("sing-box not found") {
+		t.Fatalf("blocking screen should clear after sing-box is detected, texts=%q", tt.Texts())
+	}
+	if !tt.HasText("Add Node") || !tt.HasText("alpha") {
+		t.Fatalf("expected main UI after Check Again, texts=%q", tt.Texts())
+	}
 }

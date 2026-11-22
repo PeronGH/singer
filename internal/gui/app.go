@@ -2,6 +2,7 @@ package gui
 
 import (
 	"net/http"
+	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -44,6 +45,14 @@ func withProcessStarter(starter processStarter) Option {
 	}
 }
 
+func withLookPath(fn func(string) (string, error)) Option {
+	return func(a *App) {
+		if fn != nil {
+			a.lookPath = fn
+		}
+	}
+}
+
 type toastRequest struct {
 	message     string
 	actionLabel string
@@ -52,10 +61,13 @@ type toastRequest struct {
 
 // App holds the state and view logic for the Singer desktop UI.
 type App struct {
-	store    *store.Store
-	client   *http.Client
-	win      *mygo.Window
-	dispatch func(func())
+	store      *store.Store
+	client     *http.Client
+	win        *mygo.Window
+	dispatch   func(func())
+	lookPath   func(string) (string, error)
+	quit       func()
+	singBoxErr error
 
 	groups       []store.Group
 	selectedNav  string
@@ -101,6 +113,8 @@ func New(s *store.Store, opts ...Option) (*App, error) {
 	a := &App{
 		store:            s,
 		client:           &http.Client{Timeout: 15 * time.Second},
+		lookPath:         exec.LookPath,
+		quit:             mygo.App.Quit,
 		groups:           groups,
 		selectedNav:      selectedNav,
 		lastNav:          selectedNav,
@@ -113,6 +127,7 @@ func New(s *store.Store, opts ...Option) (*App, error) {
 	for _, opt := range opts {
 		opt(a)
 	}
+	a.checkSingBox()
 	return a, nil
 }
 
@@ -131,6 +146,11 @@ func (a *App) Shutdown() {
 
 // View builds the full Singer desktop UI for the current frame.
 func (a *App) View(c *ui.Context) {
+	if a.singBoxErr != nil {
+		a.missingSingBoxView(c)
+		return
+	}
+
 	a.flushToasts(c)
 	a.handleGlobalShortcuts(c)
 
@@ -452,6 +472,42 @@ func (a *App) openEditLocalNodeModal(index int, uri string) {
 	a.nodeURI = uri
 	a.nodeURIErr = ""
 	a.nodeModalOpen = true
+}
+
+func (a *App) checkSingBox() {
+	_, err := a.lookPath("sing-box")
+	a.singBoxErr = err
+}
+
+func (a *App) missingSingBoxView(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Fill().Center().Padding(32).Children(func() {
+		ui.Column(c).
+			MaxWidth(440).
+			Padding(24).
+			Gap(12).
+			Radius(t.Radius).
+			Background(t.Surface).
+			Border(1, t.Border).
+			Children(func() {
+				ui.Text(c, "sing-box not found").FontSize(20).Bold()
+				ui.Text(c, "Singer requires the sing-box binary to be installed and available on your PATH.").
+					TextColor(t.TextMuted)
+				ui.Text(c, a.singBoxErr.Error()).
+					Font("monospace").
+					FontSize(12).
+					TextColor(t.Danger).
+					Selectable()
+				ui.Row(c).Gap(8).Justify(ui.End).Margin(4, 0, 0, 0).Children(func() {
+					if ui.Button(c, "Quit").Clicked() {
+						a.quit()
+					}
+					if ui.PrimaryButton(c, "Check Again").Clicked() {
+						a.checkSingBox()
+					}
+				})
+			})
+	})
 }
 
 func (a *App) errorBannerView(c *ui.Context) {
