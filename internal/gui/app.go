@@ -188,6 +188,12 @@ func (a *App) Shutdown() {
 	a.runner.shutdown()
 }
 
+// SetBackgrounded pauses periodic metrics polling and UI log streams while the
+// app is backgrounded, resuming them when returning to the foreground.
+func (a *App) SetBackgrounded(bg bool) {
+	a.runner.setBackgrounded(bg, a.dispatchUI)
+}
+
 // View builds the full Singer desktop UI for the current frame.
 func (a *App) View(c *ui.Context) {
 	if a.singBoxErr != nil {

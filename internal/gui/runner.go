@@ -47,6 +47,13 @@ type processDetacher interface {
 	Detach()
 }
 
+// processStreamPauser is implemented by processes whose UI log stream can be
+// paused while the app is backgrounded to avoid unnecessary wakeups.
+type processStreamPauser interface {
+	PauseStreams()
+	ResumeStreams()
+}
+
 type externalEvent struct {
 	running bool
 	req     runRequest
@@ -72,14 +79,16 @@ type runner struct {
 	metricsRunID    uint64
 	runSeq          uint64
 
-	starting    bool
-	active      bool
-	stopping    bool
-	activeGroup string
-	activeTag   string
-	activeIndex int
-	pending     *runRequest
-	metrics     trafficMetrics
+	starting     bool
+	active       bool
+	stopping     bool
+	backgrounded bool
+	activeGroup  string
+	activeTag    string
+	activeIndex  int
+	activeAPI    clashAPIInfo
+	pending      *runRequest
+	metrics      trafficMetrics
 
 	lines  []logEntry
 	nextID uint64
@@ -215,7 +224,14 @@ func (r *runner) onStarted(runID uint64, req runRequest, proc processHandle, err
 	r.starting = false
 	r.active = true
 	r.stopping = false
+	r.activeAPI = req.api
 	r.append(logKindStart, fmt.Sprintf("sing-box started (%s / %s)", req.groupName, req.nodeTag))
+	if r.backgrounded {
+		if p, ok := proc.(processStreamPauser); ok {
+			p.PauseStreams()
+		}
+		return
+	}
 	r.startMetrics(req.api, dispatch)
 }
 
@@ -226,12 +242,39 @@ func (r *runner) resetState() {
 	r.activeGroup = ""
 	r.activeTag = ""
 	r.activeIndex = -1
+	r.activeAPI = clashAPIInfo{}
 	r.metrics = trafficMetrics{}
+}
+
+func (r *runner) setBackgrounded(bg bool, dispatch func(func())) {
+	if r.backgrounded == bg {
+		return
+	}
+	r.backgrounded = bg
+
+	r.mu.Lock()
+	proc := r.proc
+	r.mu.Unlock()
+
+	if bg {
+		r.stopMetrics()
+		if p, ok := proc.(processStreamPauser); ok {
+			p.PauseStreams()
+		}
+		return
+	}
+
+	if r.active {
+		if p, ok := proc.(processStreamPauser); ok {
+			p.ResumeStreams()
+		}
+		r.startMetrics(r.activeAPI, dispatch)
+	}
 }
 
 func (r *runner) startMetrics(api clashAPIInfo, dispatch func(func())) {
 	r.stopMetrics()
-	if api.addr == "" {
+	if api.addr == "" || r.backgrounded {
 		return
 	}
 
@@ -459,10 +502,17 @@ func (r *runner) startWatcher(dispatch func(func()), onAttach func(runRequest), 
 			r.activeGroup = ev.req.groupName
 			r.activeTag = ev.req.nodeTag
 			r.activeIndex = ev.req.nodeIndex
+			r.activeAPI = ev.req.api
 			r.metrics = trafficMetrics{}
 			r.append(logKindStart, fmt.Sprintf("attached to running sing-box (%s / %s)", ev.req.groupName, ev.req.nodeTag))
 			if onAttach != nil {
 				onAttach(ev.req)
+			}
+			if r.backgrounded {
+				if p, ok := proc.(processStreamPauser); ok {
+					p.PauseStreams()
+				}
+				return
 			}
 			r.startMetrics(ev.req.api, dispatch)
 		})

@@ -726,7 +726,9 @@ func TestRemoteFetchingStateForNewAndExistingGroup(t *testing.T) {
 
 type detachableFakeProcess struct {
 	*fakeProcess
-	detached bool
+	detached    bool
+	pauseCount  int
+	resumeCount int
 }
 
 func (p *detachableFakeProcess) Detach() {
@@ -735,10 +737,28 @@ func (p *detachableFakeProcess) Detach() {
 	p.mu.Unlock()
 }
 
+func (p *detachableFakeProcess) PauseStreams() {
+	p.mu.Lock()
+	p.pauseCount++
+	p.mu.Unlock()
+}
+
+func (p *detachableFakeProcess) ResumeStreams() {
+	p.mu.Lock()
+	p.resumeCount++
+	p.mu.Unlock()
+}
+
 func (p *detachableFakeProcess) isDetached() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.detached
+}
+
+func (p *detachableFakeProcess) streamCounts() (pauses, resumes int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pauseCount, p.resumeCount
 }
 
 func TestExternalWatcherAttachesAndDetachesSession(t *testing.T) {
@@ -820,5 +840,97 @@ func TestExternalWatcherAttachesAndDetachesSession(t *testing.T) {
 	mu.Unlock()
 	if !second.isDetached() || second.isStopped() {
 		t.Fatalf("Shutdown on detachable handle should detach without stopping service: detached=%v stopped=%v", second.isDetached(), second.isStopped())
+	}
+}
+
+func TestSetBackgroundedPausesAndResumesMetricsAndStreams(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		polls int
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		polls++
+		n := polls
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"downloadTotal": int64(n) * 1024,
+			"uploadTotal":   int64(n) * 512,
+			"memory":        uint64(1024),
+			"connections":   []map[string]any{},
+		})
+	}))
+	defer srv.Close()
+
+	var (
+		procMu sync.Mutex
+		proc   *detachableFakeProcess
+	)
+	starter := func(_ context.Context, req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
+		p := &detachableFakeProcess{fakeProcess: newFakeProcess(onLine, onDone)}
+		procMu.Lock()
+		proc = p
+		procMu.Unlock()
+		return p, nil
+	}
+
+	app, _, events := newTestApp(t, []string{
+		"socks://10.0.0.1:1080#alpha",
+	},
+		withProcessStarter(starter),
+		withAPIAllocator(func() (clashAPIInfo, error) {
+			return clashAPIInfo{addr: srv.Listener.Addr().String()}, nil
+		}),
+		withMetricsInterval(15*time.Millisecond),
+	)
+	defer app.Shutdown()
+
+	tt := ui.NewTester(app.View, 960, 640)
+	if err := tt.Click("Connect alpha"); err != nil {
+		t.Fatalf("click Connect alpha: %v", err)
+	}
+	for !app.runner.metrics.ready {
+		drainEvents(t, events, tt, true)
+	}
+
+	app.SetBackgrounded(true)
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	pausedPolls := polls
+	mu.Unlock()
+	time.Sleep(60 * time.Millisecond)
+	mu.Lock()
+	laterPolls := polls
+	mu.Unlock()
+	if laterPolls != pausedPolls {
+		t.Fatalf("expected metrics polling to pause while backgrounded: before=%d after=%d", pausedPolls, laterPolls)
+	}
+
+	procMu.Lock()
+	p := proc
+	procMu.Unlock()
+	if pauses, resumes := p.streamCounts(); pauses != 1 || resumes != 0 {
+		t.Fatalf("expected 1 pause and 0 resumes while backgrounded, got pauses=%d resumes=%d", pauses, resumes)
+	}
+
+	app.SetBackgrounded(false)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		cur := polls
+		mu.Unlock()
+		if cur > laterPolls {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	resumedPolls := polls
+	mu.Unlock()
+	if resumedPolls <= laterPolls {
+		t.Fatalf("expected metrics polling to resume on foreground: before=%d after=%d", laterPolls, resumedPolls)
+	}
+	if pauses, resumes := p.streamCounts(); pauses != 1 || resumes != 1 {
+		t.Fatalf("expected 1 pause and 1 resume after foreground, got pauses=%d resumes=%d", pauses, resumes)
 	}
 }

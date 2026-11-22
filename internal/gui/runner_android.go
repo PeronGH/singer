@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/PeronGH/singer/internal/androidvpn"
 )
@@ -23,25 +24,119 @@ func defaultLookPath(string) (string, error) {
 var getAndroidService = sync.OnceValues(androidvpn.NewService)
 
 type androidProcess struct {
-	svc        androidvpn.Service
+	svc    androidvpn.Service
+	api    clashAPIInfo
+	onLine func(string)
+	onDone func(error)
+
+	mu         sync.Mutex
 	cancel     context.CancelFunc
-	stopOnce   sync.Once
-	detachOnce sync.Once
+	streamSkip *atomic.Bool
+	paused     bool
+	detached   bool
+	stopped    bool
+}
+
+func newAndroidProcess(svc androidvpn.Service, api clashAPIInfo, onLine func(string), onDone func(error)) *androidProcess {
+	p := &androidProcess{
+		svc:    svc,
+		api:    api,
+		onLine: onLine,
+		onDone: onDone,
+	}
+	p.mu.Lock()
+	p.startLogStreamLocked()
+	p.mu.Unlock()
+	return p
+}
+
+func (p *androidProcess) startLogStreamLocked() {
+	if p.detached || p.stopped || p.paused || p.cancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	skipDone := &atomic.Bool{}
+	p.cancel = cancel
+	p.streamSkip = skipDone
+
+	go func() {
+		err := streamClashLogs(ctx, p.api, p.onLine)
+		if !skipDone.Load() {
+			p.onDone(err)
+		}
+	}()
+}
+
+func (p *androidProcess) PauseStreams() {
+	p.mu.Lock()
+	if p.detached || p.stopped || p.paused {
+		p.mu.Unlock()
+		return
+	}
+	p.paused = true
+	cancel := p.cancel
+	skip := p.streamSkip
+	p.cancel = nil
+	p.streamSkip = nil
+	p.mu.Unlock()
+
+	if skip != nil {
+		skip.Store(true)
+	}
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (p *androidProcess) ResumeStreams() {
+	p.mu.Lock()
+	if p.detached || p.stopped || !p.paused {
+		p.mu.Unlock()
+		return
+	}
+	p.paused = false
+	p.startLogStreamLocked()
+	p.mu.Unlock()
 }
 
 func (p *androidProcess) Detach() {
-	p.detachOnce.Do(func() {
-		p.cancel()
-	})
+	p.mu.Lock()
+	if p.detached {
+		p.mu.Unlock()
+		return
+	}
+	p.detached = true
+	cancel := p.cancel
+	skip := p.streamSkip
+	p.cancel = nil
+	p.streamSkip = nil
+	p.mu.Unlock()
+
+	if skip != nil {
+		skip.Store(true)
+	}
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (p *androidProcess) Stop() error {
-	var err error
-	p.Detach()
-	p.stopOnce.Do(func() {
-		err = p.svc.Stop()
-	})
-	return err
+	p.mu.Lock()
+	alreadyStopped := p.stopped
+	p.stopped = true
+	p.paused = false
+	cancel := p.cancel
+	p.cancel = nil
+	p.streamSkip = nil
+	p.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if alreadyStopped {
+		return nil
+	}
+	return p.svc.Stop()
 }
 
 type clashLogMessage struct {
@@ -68,9 +163,7 @@ func startSingBoxProcess(ctx context.Context, req runRequest, onLine func(string
 		return nil, err
 	}
 
-	logCtx, cancel := context.WithCancel(context.Background())
-	go streamClashLogs(logCtx, req.api, onLine, onDone)
-	return &androidProcess{svc: svc, cancel: cancel}, nil
+	return newAndroidProcess(svc, req.api, onLine, onDone), nil
 }
 
 func watchExternalProcess(ctx context.Context, onEvent func(externalEvent)) {
@@ -103,16 +196,13 @@ func attachExternalProcess(req runRequest, onLine func(string), onDone func(erro
 	if err != nil {
 		return nil, err
 	}
-	logCtx, cancel := context.WithCancel(context.Background())
-	go streamClashLogs(logCtx, req.api, onLine, onDone)
-	return &androidProcess{svc: svc, cancel: cancel}, nil
+	return newAndroidProcess(svc, req.api, onLine, onDone), nil
 }
 
-func streamClashLogs(ctx context.Context, api clashAPIInfo, onLine func(string), onDone func(error)) {
+func streamClashLogs(ctx context.Context, api clashAPIInfo, onLine func(string)) error {
 	if api.addr == "" {
 		<-ctx.Done()
-		onDone(nil)
-		return
+		return nil
 	}
 
 	client := &http.Client{
@@ -121,8 +211,7 @@ func streamClashLogs(ctx context.Context, api clashAPIInfo, onLine func(string),
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+api.addr+"/logs?level=info", nil)
 	if err != nil {
-		onDone(err)
-		return
+		return err
 	}
 	if api.secret != "" {
 		req.Header.Set("Authorization", "Bearer "+api.secret)
@@ -131,11 +220,9 @@ func streamClashLogs(ctx context.Context, api clashAPIInfo, onLine func(string),
 	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			onDone(nil)
-			return
+			return nil
 		}
-		onDone(err)
-		return
+		return err
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
@@ -159,8 +246,7 @@ func streamClashLogs(ctx context.Context, api clashAPIInfo, onLine func(string),
 	}
 
 	if ctx.Err() != nil {
-		onDone(nil)
-		return
+		return nil
 	}
-	onDone(scanner.Err())
+	return scanner.Err()
 }

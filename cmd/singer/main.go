@@ -48,6 +48,18 @@ func main() {
 			app.Shutdown()
 		}
 	})
+	if runtime.GOOS == "android" {
+		mygo.App.OnDidResignActive(func() {
+			if app != nil {
+				app.SetBackgrounded(true)
+			}
+		})
+		mygo.App.OnDidBecomeActive(func() {
+			if app != nil {
+				app.SetBackgrounded(false)
+			}
+		})
+	}
 	mygo.App.WhenReady(func() {
 		if app == nil {
 			baseDir, err := mygo.App.Path(mygo.PathAppData)
