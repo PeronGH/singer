@@ -71,9 +71,9 @@ func withMetricsInterval(d time.Duration) Option {
 	}
 }
 
-func withExternalRuntime(probe externalProber, attach externalAttacher) Option {
+func withExternalWatcher(watch externalWatcher, attach externalAttacher) Option {
 	return func(a *App) {
-		a.runner.probeExternal = probe
+		a.runner.watchExternal = watch
 		a.runner.attachExternal = attach
 	}
 }
@@ -164,13 +164,11 @@ func (a *App) AttachWindow(win *mygo.Window) {
 	if a.dispatch == nil && win != nil {
 		a.dispatch = win.Update
 	}
-	a.SyncRuntime()
+	a.startExternalWatcher()
 }
 
-// SyncRuntime reconciles UI state with an already-running external VPN service
-// (for example, one started from the Android Quick Settings tile).
-func (a *App) SyncRuntime() {
-	a.runner.syncExternal(
+func (a *App) startExternalWatcher() {
+	a.runner.startWatcher(
 		a.dispatchUI,
 		func(req runRequest) {
 			a.tunMode = req.tunMode

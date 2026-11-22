@@ -12,11 +12,14 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
-import android.os.Bundle
 import android.os.CancellationSignal
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.IBinder
+import android.os.Message
+import android.os.Messenger
 import android.os.ParcelFileDescriptor
 import android.os.Process
-import android.os.ResultReceiver
 import android.system.ErrnoException
 import android.system.OsConstants
 import android.util.Log
@@ -56,6 +59,35 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     private val worker = Executors.newSingleThreadExecutor()
     private val dnsExecutor = Executors.newCachedThreadPool()
+    private val ipcThread = HandlerThread("singer-vpn-ipc").apply { start() }
+    private val clients = LinkedHashSet<Messenger>()
+
+    @Volatile
+    private var currentSnapshot = VpnSnapshot()
+
+    private val ipcHandler = object : Handler(ipcThread.looper) {
+        override fun handleMessage(msg: Message) {
+            when (msg.what) {
+                VpnIpc.MSG_REGISTER -> {
+                    val client = msg.replyTo ?: return
+                    synchronized(clients) { clients.add(client) }
+                    sendSnapshot(client, currentSnapshot)
+                }
+                VpnIpc.MSG_UNREGISTER -> {
+                    val client = msg.replyTo ?: return
+                    synchronized(clients) { clients.remove(client) }
+                }
+                VpnIpc.MSG_STOP -> {
+                    worker.execute {
+                        stopLibbox(removeForeground = true, emitStopped = true)
+                        stopSelf()
+                    }
+                }
+            }
+        }
+    }
+
+    private val serviceMessenger = Messenger(ipcHandler)
 
     @Volatile
     private var commandServer: CommandServer? = null
@@ -71,9 +103,17 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
 
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
+    override fun onBind(intent: Intent?): IBinder? {
+        if (intent?.action == VpnIpc.ACTION_BIND) {
+            return serviceMessenger.binder
+        }
+        return super.onBind(intent)
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
+                val runId = intent.getLongExtra(EXTRA_RUN_ID, 0L)
                 val config = intent.getStringExtra(EXTRA_CONFIG) ?: ""
                 val tunMode = intent.getBooleanExtra(EXTRA_TUN_MODE, false)
                 val groupName = intent.getStringExtra(EXTRA_GROUP_NAME) ?: ""
@@ -81,12 +121,8 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
                 val nodeIndex = intent.getIntExtra(EXTRA_NODE_INDEX, -1)
                 val apiAddr = intent.getStringExtra(EXTRA_API_ADDR) ?: ""
                 val apiSecret = intent.getStringExtra(EXTRA_API_SECRET) ?: ""
-                @Suppress("DEPRECATION")
-                val receiver = intent.getParcelableExtra<ResultReceiver>(EXTRA_RECEIVER)
                 promoteForeground(nodeTag, tunMode)
-                val session = StoredVpnState(
-                    running = true,
-                    pid = Process.myPid(),
+                val session = LastSession(
                     configJSON = config,
                     tunMode = tunMode,
                     groupName = groupName,
@@ -95,25 +131,34 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
                     apiAddr = apiAddr,
                     apiSecret = apiSecret,
                 )
+                val baseSnapshot = VpnSnapshot(
+                    state = VpnIpc.STATE_STARTING,
+                    runId = runId,
+                    tunMode = tunMode,
+                    groupName = groupName,
+                    nodeTag = nodeTag,
+                    nodeIndex = nodeIndex,
+                    apiAddr = apiAddr,
+                    apiSecret = apiSecret,
+                )
+                publishState(baseSnapshot)
                 worker.execute {
                     try {
+                        LastSessionStore.write(this, session)
                         startLibbox(config)
-                        VpnStateStore.write(this, session)
-                        SingerTileService.requestUpdate(this)
-                        receiver?.send(RESULT_OK, null)
+                        publishState(baseSnapshot.copy(state = VpnIpc.STATE_RUNNING))
                     } catch (e: Throwable) {
                         Log.e(TAG, "start sing-box failed", e)
-                        stopLibbox()
-                        receiver?.send(RESULT_ERROR, Bundle().apply {
-                            putString(EXTRA_ERROR, e.message ?: e.toString())
-                        })
+                        val msg = e.message ?: e.toString()
+                        stopLibbox(removeForeground = true, emitStopped = false)
+                        publishState(baseSnapshot.copy(state = VpnIpc.STATE_ERROR, error = msg))
                         stopSelf()
                     }
                 }
             }
             ACTION_STOP -> {
                 worker.execute {
-                    stopLibbox()
+                    stopLibbox(removeForeground = true, emitStopped = true)
                     stopSelf()
                 }
             }
@@ -123,17 +168,36 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
 
     override fun onRevoke() {
         worker.execute {
-            stopLibbox()
+            stopLibbox(removeForeground = true, emitStopped = true)
             stopSelf()
         }
         super.onRevoke()
     }
 
     override fun onDestroy() {
-        stopLibbox()
+        stopLibbox(removeForeground = true, emitStopped = currentSnapshot.state != VpnIpc.STATE_ERROR)
         worker.shutdownNow()
         dnsExecutor.shutdownNow()
+        ipcThread.quitSafely()
         super.onDestroy()
+    }
+
+    private fun publishState(snapshot: VpnSnapshot) {
+        currentSnapshot = snapshot
+        val targets = synchronized(clients) { clients.toList() }
+        for (client in targets) {
+            sendSnapshot(client, snapshot)
+        }
+        SingerTileService.requestUpdate(this)
+    }
+
+    private fun sendSnapshot(client: Messenger, snapshot: VpnSnapshot) {
+        val msg = Message.obtain(null, VpnIpc.MSG_STATE).apply {
+            data = snapshot.toBundle()
+        }
+        if (runCatching { client.send(msg) }.isFailure) {
+            synchronized(clients) { clients.remove(client) }
+        }
     }
 
     private fun promoteForeground(nodeTag: String, tunMode: Boolean) {
@@ -202,14 +266,14 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
 
     private fun startLibbox(configJSON: String) {
         ensureLibboxSetup()
-        stopLibbox(removeForeground = false)
+        stopLibbox(removeForeground = false, emitStopped = false)
         val server = Libbox.newCommandServer(this, this)
         commandServer = server
         server.start()
         server.startOrReloadService(configJSON, OverrideOptions())
     }
 
-    private fun stopLibbox(removeForeground: Boolean = true) {
+    private fun stopLibbox(removeForeground: Boolean = true, emitStopped: Boolean = true) {
         unregisterNetworkMonitor()
         val server = commandServer
         commandServer = null
@@ -223,9 +287,10 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
             runCatching { pfd.close() }
         }
         if (removeForeground) {
-            VpnStateStore.markStopped(this)
-            SingerTileService.requestUpdate(this)
             stopForeground(STOP_FOREGROUND_REMOVE)
+        }
+        if (emitStopped) {
+            publishState(VpnSnapshot(state = VpnIpc.STATE_STOPPED))
         }
     }
 
@@ -621,6 +686,7 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
 
         const val ACTION_START = "uk.ihack.singer.action.START"
         const val ACTION_STOP = "uk.ihack.singer.action.STOP"
+        const val EXTRA_RUN_ID = "run_id"
         const val EXTRA_CONFIG = "config"
         const val EXTRA_TUN_MODE = "tun_mode"
         const val EXTRA_GROUP_NAME = "group_name"
@@ -628,10 +694,6 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
         const val EXTRA_NODE_INDEX = "node_index"
         const val EXTRA_API_ADDR = "api_addr"
         const val EXTRA_API_SECRET = "api_secret"
-        const val EXTRA_RECEIVER = "receiver"
-        const val EXTRA_ERROR = "error"
-        const val RESULT_OK = 0
-        const val RESULT_ERROR = 1
 
         private val libboxInitialized = AtomicBoolean(false)
     }

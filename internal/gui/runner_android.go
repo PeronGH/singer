@@ -64,25 +64,29 @@ func startSingBoxProcess(ctx context.Context, req runRequest, onLine func(string
 	return &androidProcess{svc: svc, cancel: cancel}, nil
 }
 
-func probeExternalProcess() (runRequest, bool) {
+func watchExternalProcess(ctx context.Context, onEvent func(externalEvent)) {
 	svc, err := androidvpn.NewService()
 	if err != nil {
-		return runRequest{}, false
+		return
 	}
-	st, err := svc.Status()
-	if err != nil || !st.Running {
-		return runRequest{}, false
+	for st, err := range svc.Watch(ctx) {
+		if err != nil {
+			return
+		}
+		onEvent(externalEvent{
+			running: st.Running,
+			req: runRequest{
+				groupName: st.GroupName,
+				nodeTag:   st.NodeTag,
+				nodeIndex: st.NodeIndex,
+				tunMode:   st.TunMode,
+				api: clashAPIInfo{
+					addr:   st.APIAddr,
+					secret: st.APISecret,
+				},
+			},
+		})
 	}
-	return runRequest{
-		groupName: st.GroupName,
-		nodeTag:   st.NodeTag,
-		nodeIndex: st.NodeIndex,
-		tunMode:   st.TunMode,
-		api: clashAPIInfo{
-			addr:   st.APIAddr,
-			secret: st.APISecret,
-		},
-	}, true
 }
 
 func attachExternalProcess(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {

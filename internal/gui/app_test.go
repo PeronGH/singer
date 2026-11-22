@@ -724,27 +724,39 @@ func TestRemoteFetchingStateForNewAndExistingGroup(t *testing.T) {
 	}
 }
 
-func TestSyncExternalRuntimeAttachesRunningSession(t *testing.T) {
-	var attachedProc *fakeProcess
+func TestExternalWatcherAttachesAndDetachesSession(t *testing.T) {
+	extCh := make(chan externalEvent, 4)
 	app, _, events := newTestApp(t, []string{
 		"socks://10.0.0.1:1080#alpha",
-	}, withExternalRuntime(
-		func() (runRequest, bool) {
-			return runRequest{
-				groupName: "local",
-				nodeTag:   "alpha",
-				nodeIndex: 0,
-				tunMode:   true,
-			}, true
+	}, withExternalWatcher(
+		func(ctx context.Context, onEvent func(externalEvent)) {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case ev := <-extCh:
+					onEvent(ev)
+				}
+			}
 		},
 		func(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
-			attachedProc = newFakeProcess(onLine, onDone)
-			return attachedProc, nil
+			return newFakeProcess(onLine, onDone), nil
 		},
 	))
-	tt := ui.NewTester(app.View, 960, 640)
+	defer app.Shutdown()
 
-	app.SyncRuntime()
+	tt := ui.NewTester(app.View, 960, 640)
+	app.startExternalWatcher()
+
+	extCh <- externalEvent{
+		running: true,
+		req: runRequest{
+			groupName: "local",
+			nodeTag:   "alpha",
+			nodeIndex: 0,
+			tunMode:   true,
+		},
+	}
 	drainEvents(t, events, tt, true)
 
 	if !app.runner.active || app.runner.activeTag != "alpha" || !app.tunMode {
@@ -754,9 +766,9 @@ func TestSyncExternalRuntimeAttachesRunningSession(t *testing.T) {
 		t.Fatalf("expected Connected and Active indicators, texts=%q", tt.Texts())
 	}
 
-	attachedProc.exit(nil)
+	extCh <- externalEvent{running: false}
 	drainEvents(t, events, tt, true)
 	if app.runner.active {
-		t.Fatal("expected runner to transition to inactive when external process exits")
+		t.Fatal("expected runner to transition to inactive when Binder pushes stopped")
 	}
 }

@@ -41,17 +41,23 @@ type processHandle interface {
 	Stop() error
 }
 
+type externalEvent struct {
+	running bool
+	req     runRequest
+}
+
 type processStarter func(ctx context.Context, req runRequest, onLine func(string), onDone func(error)) (processHandle, error)
-type externalProber func() (runRequest, bool)
+type externalWatcher func(ctx context.Context, onEvent func(externalEvent))
 type externalAttacher func(req runRequest, onLine func(string), onDone func(error)) (processHandle, error)
 
 type runner struct {
 	mu              sync.Mutex
 	proc            processHandle
 	startCancel     context.CancelFunc
+	watchCancel     context.CancelFunc
 	closed          bool
 	startProcess    processStarter
-	probeExternal   externalProber
+	watchExternal   externalWatcher
 	attachExternal  externalAttacher
 	lookPath        func(string) (string, error)
 	metricsClient   *http.Client
@@ -59,7 +65,6 @@ type runner struct {
 	metricsCancel   context.CancelFunc
 	metricsRunID    uint64
 	runSeq          uint64
-	syncingExternal bool
 
 	starting    bool
 	active      bool
@@ -80,7 +85,7 @@ func newRunner(starter processStarter) *runner {
 	}
 	return &runner{
 		startProcess:    starter,
-		probeExternal:   probeExternalProcess,
+		watchExternal:   watchExternalProcess,
 		attachExternal:  attachExternalProcess,
 		lookPath:        defaultLookPath,
 		metricsClient:   newLocalHTTPClient(),
@@ -320,11 +325,16 @@ func (r *runner) shutdown() {
 	r.proc = nil
 	startCancel := r.startCancel
 	r.startCancel = nil
+	watchCancel := r.watchCancel
+	r.watchCancel = nil
 	r.mu.Unlock()
 
 	r.pending = nil
 	r.resetState()
 	r.stopping = true
+	if watchCancel != nil {
+		watchCancel()
+	}
 	if startCancel != nil {
 		startCancel()
 	}
@@ -368,28 +378,38 @@ func (r *runner) isNodeActive(groupName string, nodeIndex int) bool {
 	return r.active && r.activeGroup == groupName && r.activeIndex == nodeIndex
 }
 
-func (r *runner) syncExternal(dispatch func(func()), onAttach func(runRequest), onErr func(error)) {
-	if r.busy() || r.syncingExternal || r.probeExternal == nil || r.attachExternal == nil {
+func (r *runner) startWatcher(dispatch func(func()), onAttach func(runRequest), onErr func(error)) {
+	if r.watchExternal == nil || r.attachExternal == nil {
 		return
 	}
 	r.mu.Lock()
-	closed := r.closed
-	r.mu.Unlock()
-	if closed {
+	if r.closed || r.watchCancel != nil {
+		r.mu.Unlock()
 		return
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r.watchCancel = cancel
+	r.mu.Unlock()
 
-	r.syncingExternal = true
-	probe := r.probeExternal
+	watch := r.watchExternal
 	attach := r.attachExternal
-	go func() {
-		req, ok := probe()
+	go watch(ctx, func(ev externalEvent) {
 		dispatch(func() {
-			r.syncingExternal = false
 			r.mu.Lock()
 			isClosed := r.closed
 			r.mu.Unlock()
-			if !ok || isClosed || r.busy() {
+			if isClosed {
+				return
+			}
+
+			if !ev.running {
+				if r.active && !r.starting {
+					r.finish(nil, dispatch, onErr)
+				}
+				return
+			}
+
+			if r.busy() {
 				return
 			}
 
@@ -408,7 +428,7 @@ func (r *runner) syncExternal(dispatch func(func()), onAttach func(runRequest), 
 				})
 			}
 
-			proc, err := attach(req, onLine, onDone)
+			proc, err := attach(ev.req, onLine, onDone)
 			if err != nil || proc == nil {
 				return
 			}
@@ -420,15 +440,15 @@ func (r *runner) syncExternal(dispatch func(func()), onAttach func(runRequest), 
 			r.starting = false
 			r.active = true
 			r.stopping = false
-			r.activeGroup = req.groupName
-			r.activeTag = req.nodeTag
-			r.activeIndex = req.nodeIndex
+			r.activeGroup = ev.req.groupName
+			r.activeTag = ev.req.nodeTag
+			r.activeIndex = ev.req.nodeIndex
 			r.metrics = trafficMetrics{}
-			r.append(logKindStart, fmt.Sprintf("attached to running sing-box (%s / %s)", req.groupName, req.nodeTag))
+			r.append(logKindStart, fmt.Sprintf("attached to running sing-box (%s / %s)", ev.req.groupName, ev.req.nodeTag))
 			if onAttach != nil {
-				onAttach(req)
+				onAttach(ev.req)
 			}
-			r.startMetrics(req.api, dispatch)
+			r.startMetrics(ev.req.api, dispatch)
 		})
-	}()
+	})
 }

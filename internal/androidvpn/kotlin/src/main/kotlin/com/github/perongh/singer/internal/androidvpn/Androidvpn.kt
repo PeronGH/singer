@@ -6,10 +6,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.ResultReceiver
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,9 +15,14 @@ import androidx.core.content.ContextCompat
 import dev.mygo.Native
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
@@ -35,56 +38,46 @@ private class AndroidVpnController : Service {
             ensureVpnPermission()
         }
 
-        suspendCancellableCoroutine { cont ->
-            val receiver = object : ResultReceiver(null) {
-                override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                    if (!cont.isActive) return
-                    if (resultCode == SingerVpnService.RESULT_OK) {
-                        cont.resume(Unit)
-                    } else {
-                        val msg = resultData?.getString(SingerVpnService.EXTRA_ERROR) ?: "failed to start VPN service"
-                        cont.resumeWithException(IllegalStateException(msg))
-                    }
+        val client = VpnBinderClient.ensureBound(context)
+        val runId = nextRunId.incrementAndGet()
+        val disconnectBaseline = client.disconnectCount.value
+
+        val intent = Intent(context, SingerVpnService::class.java).apply {
+            action = SingerVpnService.ACTION_START
+            putExtra(SingerVpnService.EXTRA_RUN_ID, runId)
+            putExtra(SingerVpnService.EXTRA_CONFIG, req.configJSON)
+            putExtra(SingerVpnService.EXTRA_TUN_MODE, req.tunMode)
+            putExtra(SingerVpnService.EXTRA_GROUP_NAME, req.groupName)
+            putExtra(SingerVpnService.EXTRA_NODE_TAG, req.nodeTag)
+            putExtra(SingerVpnService.EXTRA_NODE_INDEX, req.nodeIndex.toInt())
+            putExtra(SingerVpnService.EXTRA_API_ADDR, req.apiAddr)
+            putExtra(SingerVpnService.EXTRA_API_SECRET, req.apiSecret)
+        }
+        ContextCompat.startForegroundService(context, intent)
+
+        val (terminal, _) = try {
+            combine(client.snapshots, client.disconnectCount) { snap, disconnects -> snap to disconnects }
+                .first { (snap, disconnects) ->
+                    (snap.runId == runId && snap.state != VpnIpc.STATE_STARTING) ||
+                        (snap.state == VpnIpc.STATE_STOPPED && disconnects > disconnectBaseline)
                 }
-            }
+        } catch (e: CancellationException) {
+            stop()
+            throw e
+        }
 
-            cont.invokeOnCancellation { stop() }
-
-            val intent = Intent(context, SingerVpnService::class.java).apply {
-                action = SingerVpnService.ACTION_START
-                putExtra(SingerVpnService.EXTRA_CONFIG, req.configJSON)
-                putExtra(SingerVpnService.EXTRA_TUN_MODE, req.tunMode)
-                putExtra(SingerVpnService.EXTRA_GROUP_NAME, req.groupName)
-                putExtra(SingerVpnService.EXTRA_NODE_TAG, req.nodeTag)
-                putExtra(SingerVpnService.EXTRA_NODE_INDEX, req.nodeIndex.toInt())
-                putExtra(SingerVpnService.EXTRA_API_ADDR, req.apiAddr)
-                putExtra(SingerVpnService.EXTRA_API_SECRET, req.apiSecret)
-                putExtra(SingerVpnService.EXTRA_RECEIVER, receiver)
-            }
-            ContextCompat.startForegroundService(context, intent)
+        when (terminal.state) {
+            VpnIpc.STATE_RUNNING -> Unit
+            VpnIpc.STATE_ERROR -> throw IllegalStateException(terminal.error.ifEmpty { "failed to start VPN service" })
+            else -> throw IllegalStateException("VPN service stopped")
         }
     }
 
     override fun stop() {
-        val context = Native.context
-        val intent = Intent(context, SingerVpnService::class.java).apply {
-            action = SingerVpnService.ACTION_STOP
-        }
-        runCatching { context.startService(intent) }
+        VpnBinderClient.sendStop(Native.context)
     }
 
-    override fun status(): Status {
-        val live = VpnStateStore.readLive(Native.context)
-        return Status(
-            running = live.running,
-            tunMode = live.tunMode,
-            groupName = live.groupName,
-            nodeTag = live.nodeTag,
-            nodeIndex = live.nodeIndex.toLong(),
-            apiAddr = live.apiAddr,
-            apiSecret = live.apiSecret,
-        )
-    }
+    override fun watch(): Flow<Status> = VpnBinderClient.ensureBound(Native.context).statusFlow()
 
     private suspend fun maybeRequestNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
@@ -145,5 +138,6 @@ private class AndroidVpnController : Service {
 
     companion object {
         private val askedNotificationPermission = AtomicBoolean(false)
+        private val nextRunId = AtomicLong(System.currentTimeMillis() * 1000L)
     }
 }

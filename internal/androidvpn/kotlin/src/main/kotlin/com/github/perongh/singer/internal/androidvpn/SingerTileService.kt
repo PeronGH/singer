@@ -9,54 +9,83 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class SingerTileService : TileService() {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var listenJob: Job? = null
+
     override fun onStartListening() {
         super.onStartListening()
-        refreshTile()
+        val client = VpnBinderClient.ensureBound(this)
+        listenJob?.cancel()
+        listenJob = scope.launch {
+            client.snapshots.collect { snap ->
+                renderTile(snap)
+            }
+        }
+    }
+
+    override fun onStopListening() {
+        listenJob?.cancel()
+        listenJob = null
+        super.onStopListening()
     }
 
     override fun onClick() {
         super.onClick()
-        val live = VpnStateStore.readLive(this)
-        if (live.running) {
-            val stopIntent = Intent(this, SingerVpnService::class.java).apply {
-                action = SingerVpnService.ACTION_STOP
-            }
-            runCatching { startService(stopIntent) }
-            updateTileState(active = false, subtitle = live.nodeTag.ifEmpty { "Disconnected" })
+        val client = VpnBinderClient.ensureBound(this)
+        val snap = client.snapshots.value
+        if (snap.state == VpnIpc.STATE_RUNNING || snap.state == VpnIpc.STATE_STARTING) {
+            client.sendStop(this)
+            updateTileState(active = false, subtitle = snap.nodeTag.ifEmpty { "Disconnected" })
             return
         }
 
-        val canStartDirectly = live.configJSON.isNotEmpty() &&
-            (!live.tunMode || VpnService.prepare(this) == null)
+        val last = LastSessionStore.read(this)
+        val canStartDirectly = last.configJSON.isNotEmpty() &&
+            (!last.tunMode || VpnService.prepare(this) == null)
         if (canStartDirectly) {
             val startIntent = Intent(this, SingerVpnService::class.java).apply {
                 action = SingerVpnService.ACTION_START
-                putExtra(SingerVpnService.EXTRA_CONFIG, live.configJSON)
-                putExtra(SingerVpnService.EXTRA_TUN_MODE, live.tunMode)
-                putExtra(SingerVpnService.EXTRA_GROUP_NAME, live.groupName)
-                putExtra(SingerVpnService.EXTRA_NODE_TAG, live.nodeTag)
-                putExtra(SingerVpnService.EXTRA_NODE_INDEX, live.nodeIndex)
-                putExtra(SingerVpnService.EXTRA_API_ADDR, live.apiAddr)
-                putExtra(SingerVpnService.EXTRA_API_SECRET, live.apiSecret)
+                putExtra(SingerVpnService.EXTRA_CONFIG, last.configJSON)
+                putExtra(SingerVpnService.EXTRA_TUN_MODE, last.tunMode)
+                putExtra(SingerVpnService.EXTRA_GROUP_NAME, last.groupName)
+                putExtra(SingerVpnService.EXTRA_NODE_TAG, last.nodeTag)
+                putExtra(SingerVpnService.EXTRA_NODE_INDEX, last.nodeIndex)
+                putExtra(SingerVpnService.EXTRA_API_ADDR, last.apiAddr)
+                putExtra(SingerVpnService.EXTRA_API_SECRET, last.apiSecret)
             }
             ContextCompat.startForegroundService(this, startIntent)
-            updateTileState(active = true, subtitle = live.nodeTag.ifEmpty { "Starting…" })
+            updateTileState(active = true, subtitle = last.nodeTag.ifEmpty { "Starting…" })
             return
         }
 
         openApp()
     }
 
-    private fun refreshTile() {
-        val live = VpnStateStore.readLive(this)
-        val subtitle = when {
-            live.running -> live.nodeTag.ifEmpty { "Connected" }
-            live.configJSON.isNotEmpty() -> live.nodeTag.ifEmpty { "Disconnected" }
-            else -> "Open to select node"
+    private fun renderTile(snap: VpnSnapshot) {
+        when (snap.state) {
+            VpnIpc.STATE_RUNNING -> {
+                updateTileState(active = true, subtitle = snap.nodeTag.ifEmpty { "Connected" })
+            }
+            VpnIpc.STATE_STARTING -> {
+                updateTileState(active = true, subtitle = snap.nodeTag.ifEmpty { "Starting…" })
+            }
+            else -> {
+                val last = LastSessionStore.read(this)
+                val subtitle = if (last.configJSON.isNotEmpty()) {
+                    last.nodeTag.ifEmpty { "Disconnected" }
+                } else {
+                    "Open to select node"
+                }
+                updateTileState(active = false, subtitle = subtitle)
+            }
         }
-        updateTileState(active = live.running, subtitle = subtitle)
     }
 
     private fun updateTileState(active: Boolean, subtitle: String) {
