@@ -4,8 +4,8 @@ go 1.27.3
 
 require (
 	github.com/egoist/mygo v0.10.0
-	github.com/sagernet/sing v0.8.4
-	github.com/sagernet/sing-box v1.13.5
+	github.com/sagernet/sing v0.9.7-0.20261023115459-5dc452e537bf
+	github.com/sagernet/sing-box v1.14.4
 )
 
 require (
