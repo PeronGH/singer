@@ -52,7 +52,7 @@ func (p execProcess) Stop() error {
 }
 
 func startSingBoxProcess(configJSON []byte, onLine func(string), onDone func(error)) (processHandle, error) {
-	cmd := exec.Command(singBoxBinary, "run", "-c", "stdin")
+	cmd := exec.Command(singBoxBinary, "run", "--disable-color", "-c", "stdin")
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
