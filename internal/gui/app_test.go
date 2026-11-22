@@ -63,6 +63,7 @@ func newTestApp(t *testing.T, nodes []string, opts ...Option) (*App, *store.Stor
 	allOpts := append([]Option{
 		WithDispatcher(func(fn func()) { events <- fn }),
 		withLookPath(func(string) (string, error) { return "/usr/bin/sing-box", nil }),
+		withAPIAllocator(func() (clashAPIInfo, error) { return clashAPIInfo{}, nil }),
 	}, opts...)
 	app, err := New(s, allOpts...)
 	if err != nil {
@@ -412,5 +413,106 @@ func TestTunModeToggleGeneratesTunConfig(t *testing.T) {
 		if s.Type == "fakeip" {
 			t.Fatal("fakeip must not be present in TUN config")
 		}
+	}
+}
+
+func TestClashAPIMetricsPollingAndUI(t *testing.T) {
+	const wantSecret = "test-secret-token"
+	var (
+		mu   sync.Mutex
+		poll int
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/connections" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer "+wantSecret {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		poll++
+		n := poll
+		mu.Unlock()
+
+		resp := map[string]any{
+			"downloadTotal": int64(n) * 1024 * 1024,
+			"uploadTotal":   int64(n) * 256 * 1024,
+			"memory":        uint64(16 * 1024 * 1024),
+			"connections":   []map[string]any{{"id": "1"}, {"id": "2"}},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	var (
+		startedConfig []byte
+		proc          *fakeProcess
+	)
+	starter := func(configJSON []byte, onLine func(string), onDone func(error)) (processHandle, error) {
+		startedConfig = append([]byte(nil), configJSON...)
+		proc = newFakeProcess(onLine, onDone)
+		return proc, nil
+	}
+
+	app, _, events := newTestApp(t, []string{
+		"socks://10.0.0.1:1080#alpha",
+	},
+		withProcessStarter(starter),
+		withAPIAllocator(func() (clashAPIInfo, error) {
+			return clashAPIInfo{addr: srv.Listener.Addr().String(), secret: wantSecret}, nil
+		}),
+		withMetricsInterval(20*time.Millisecond),
+	)
+	defer app.Shutdown()
+
+	tt := ui.NewTester(app.View, 960, 640)
+	if err := tt.Click("Connect alpha"); err != nil {
+		t.Fatalf("click Connect alpha: %v", err)
+	}
+
+	var cfg struct {
+		Experimental struct {
+			ClashAPI struct {
+				ExternalController string `json:"external_controller"`
+				Secret             string `json:"secret"`
+			} `json:"clash_api"`
+		} `json:"experimental"`
+	}
+	if err := json.Unmarshal(startedConfig, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if cfg.Experimental.ClashAPI.ExternalController != srv.Listener.Addr().String() {
+		t.Fatalf("external_controller = %q, want %q", cfg.Experimental.ClashAPI.ExternalController, srv.Listener.Addr().String())
+	}
+	if cfg.Experimental.ClashAPI.Secret != wantSecret {
+		t.Fatalf("secret = %q, want %q", cfg.Experimental.ClashAPI.Secret, wantSecret)
+	}
+
+	// Wait for at least two polls so rate and totals are populated.
+	drainEvents(t, events, tt, true)
+	drainEvents(t, events, tt, true)
+
+	if !app.runner.metrics.ready {
+		t.Fatal("expected metrics to be ready")
+	}
+	if app.runner.metrics.connections != 2 {
+		t.Fatalf("connections = %d, want 2", app.runner.metrics.connections)
+	}
+	if app.runner.metrics.downTotal < 2*1024*1024 || app.runner.metrics.upTotal < 512*1024 {
+		t.Fatalf("unexpected totals: %+v", app.runner.metrics)
+	}
+	if app.runner.metrics.downRate <= 0 || app.runner.metrics.upRate <= 0 {
+		t.Fatalf("expected positive transfer rates, got %+v", app.runner.metrics)
+	}
+	if !tt.HasText("16.0 MB") || !tt.HasText("Connections") {
+		t.Fatalf("expected metrics rendered in Logs view, texts=%q", tt.Texts())
+	}
+
+	proc.exit(nil)
+	drainEvents(t, events, tt, true)
+	if app.runner.metrics.ready {
+		t.Fatal("expected metrics to reset when sing-box exits")
 	}
 }

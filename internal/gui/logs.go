@@ -41,6 +41,10 @@ func (a *App) logsView(c *ui.Context) {
 
 		a.errorBannerView(c)
 
+		if a.runner.active {
+			a.metricsBarView(c)
+		}
+
 		a.logList.Key = func(i int) any { return lines[i].id }
 		a.logList.FollowEnd = true
 
@@ -71,5 +75,40 @@ func (a *App) logsView(c *ui.Context) {
 				}
 			})
 		})
+	})
+}
+
+func (a *App) metricsBarView(c *ui.Context) {
+	t := c.Theme()
+	m := a.runner.metrics
+
+	card := func(label, value, sub string) {
+		ui.Column(c).Grow(1).MinWidth(0).Padding(8, 12).Gap(2).Radius(t.Radius).
+			Background(t.Surface).Border(1, t.Border).Children(func() {
+			ui.Text(c, label).FontSize(11).TextColor(t.TextMuted).SingleLine()
+			ui.Text(c, value).FontSize(14).Bold().FontFeatures("tnum").SingleLine()
+			if sub != "" {
+				ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
+			}
+		})
+	}
+
+	downVal, downSub := "—", "Total —"
+	upVal, upSub := "—", "Total —"
+	connVal, memVal := "—", "—"
+	if m.ready {
+		downVal = formatRate(m.downRate)
+		downSub = "Total " + formatBytes(m.downTotal)
+		upVal = formatRate(m.upRate)
+		upSub = "Total " + formatBytes(m.upTotal)
+		connVal = fmt.Sprint(m.connections)
+		memVal = formatBytes(int64(m.memory))
+	}
+
+	ui.Row(c).Gap(10).AlignItems(ui.Stretch).Children(func() {
+		card("Download", downVal, downSub)
+		card("Upload", upVal, upSub)
+		card("Connections", connVal, "Active")
+		card("Memory", memVal, "sing-box")
 	})
 }

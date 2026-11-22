@@ -85,6 +85,18 @@ func (a *App) statusFooterView(c *ui.Context) {
 			})
 			ui.Text(c, a.runner.activeTag).FontSize(13).Bold().SingleLine()
 			ui.Text(c, a.runner.activeGroup).FontSize(12).TextColor(t.TextMuted).SingleLine()
+			if m := a.runner.metrics; m.ready {
+				ui.Column(c).Gap(2).Children(func() {
+					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Textf(c, "↓ %s", formatRate(m.downRate)).FontSize(11).FontFeatures("tnum").Grow(1)
+						ui.Text(c, formatBytes(m.downTotal)).FontSize(11).FontFeatures("tnum").TextColor(t.TextMuted)
+					})
+					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Textf(c, "↑ %s", formatRate(m.upRate)).FontSize(11).FontFeatures("tnum").Grow(1)
+						ui.Text(c, formatBytes(m.upTotal)).FontSize(11).FontFeatures("tnum").TextColor(t.TextMuted)
+					})
+				})
+			}
 			ui.Row(c).Gap(6).Children(func() {
 				if ui.Button(c, "Stop").Label("Stop sing-box").Grow(1).Clicked() {
 					a.stopRunner()

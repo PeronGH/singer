@@ -2,7 +2,9 @@ package gui
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -35,6 +37,7 @@ type runRequest struct {
 	nodeTag    string
 	nodeIndex  int
 	configJSON []byte
+	api        clashAPIInfo
 }
 
 type processHandle interface {
@@ -109,11 +112,15 @@ func startSingBoxProcess(configJSON []byte, onLine func(string), onDone func(err
 }
 
 type runner struct {
-	mu           sync.Mutex
-	proc         processHandle
-	closed       bool
-	startProcess processStarter
-	lookPath     func(string) (string, error)
+	mu              sync.Mutex
+	proc            processHandle
+	closed          bool
+	startProcess    processStarter
+	lookPath        func(string) (string, error)
+	metricsClient   *http.Client
+	metricsInterval time.Duration
+	metricsCancel   context.CancelFunc
+	metricsRunID    uint64
 
 	active      bool
 	stopping    bool
@@ -121,6 +128,7 @@ type runner struct {
 	activeTag   string
 	activeIndex int
 	pending     *runRequest
+	metrics     trafficMetrics
 
 	lines  []logEntry
 	nextID uint64
@@ -131,9 +139,11 @@ func newRunner(starter processStarter) *runner {
 		starter = startSingBoxProcess
 	}
 	return &runner{
-		startProcess: starter,
-		lookPath:     exec.LookPath,
-		activeIndex:  -1,
+		startProcess:    starter,
+		lookPath:        exec.LookPath,
+		metricsClient:   newLocalHTTPClient(),
+		metricsInterval: defaultMetricsInterval,
+		activeIndex:     -1,
 	}
 }
 
@@ -189,7 +199,43 @@ func (r *runner) launch(req runRequest, dispatch func(func()), onErr func(error)
 	r.activeGroup = req.groupName
 	r.activeTag = req.nodeTag
 	r.activeIndex = req.nodeIndex
+	r.metrics = trafficMetrics{}
 	r.append(logKindStart, fmt.Sprintf("sing-box started (%s / %s)", req.groupName, req.nodeTag))
+	r.startMetrics(req.api, dispatch)
+}
+
+func (r *runner) startMetrics(api clashAPIInfo, dispatch func(func())) {
+	r.stopMetrics()
+	if api.addr == "" {
+		return
+	}
+
+	r.metricsRunID++
+	runID := r.metricsRunID
+	ctx, cancel := context.WithCancel(context.Background())
+	r.mu.Lock()
+	r.metricsCancel = cancel
+	r.mu.Unlock()
+
+	client := r.metricsClient
+	interval := r.metricsInterval
+	go runMetricsPoller(ctx, client, api, interval, func(m trafficMetrics) {
+		dispatch(func() {
+			if r.active && r.metricsRunID == runID {
+				r.metrics = m
+			}
+		})
+	})
+}
+
+func (r *runner) stopMetrics() {
+	r.mu.Lock()
+	cancel := r.metricsCancel
+	r.metricsCancel = nil
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (r *runner) stop() {
@@ -205,6 +251,8 @@ func (r *runner) stop() {
 }
 
 func (r *runner) finish(err error, dispatch func(func()), onErr func(error)) {
+	r.stopMetrics()
+
 	r.mu.Lock()
 	r.proc = nil
 	closed := r.closed
@@ -216,6 +264,7 @@ func (r *runner) finish(err error, dispatch func(func()), onErr func(error)) {
 	r.activeGroup = ""
 	r.activeTag = ""
 	r.activeIndex = -1
+	r.metrics = trafficMetrics{}
 
 	if closed {
 		r.pending = nil
@@ -243,6 +292,8 @@ func (r *runner) finish(err error, dispatch func(func()), onErr func(error)) {
 }
 
 func (r *runner) shutdown() {
+	r.stopMetrics()
+
 	r.mu.Lock()
 	r.closed = true
 	proc := r.proc
@@ -251,6 +302,7 @@ func (r *runner) shutdown() {
 
 	r.pending = nil
 	r.stopping = true
+	r.metrics = trafficMetrics{}
 	if proc != nil {
 		_ = proc.Stop()
 	}

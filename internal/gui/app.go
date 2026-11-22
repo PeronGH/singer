@@ -10,6 +10,7 @@ import (
 	"github.com/PeronGH/singer/sub"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/sagernet/sing-box/option"
 )
 
 const (
@@ -54,6 +55,22 @@ func withLookPath(fn func(string) (string, error)) Option {
 	}
 }
 
+func withAPIAllocator(fn func() (clashAPIInfo, error)) Option {
+	return func(a *App) {
+		if fn != nil {
+			a.allocateAPI = fn
+		}
+	}
+}
+
+func withMetricsInterval(d time.Duration) Option {
+	return func(a *App) {
+		if d > 0 {
+			a.runner.metricsInterval = d
+		}
+	}
+}
+
 type toastRequest struct {
 	message     string
 	actionLabel string
@@ -62,12 +79,13 @@ type toastRequest struct {
 
 // App holds the state and view logic for the Singer desktop UI.
 type App struct {
-	store      *store.Store
-	client     *http.Client
-	win        *mygo.Window
-	dispatch   func(func())
-	quit       func()
-	singBoxErr error
+	store       *store.Store
+	client      *http.Client
+	win         *mygo.Window
+	dispatch    func(func())
+	allocateAPI func() (clashAPIInfo, error)
+	quit        func()
+	singBoxErr  error
 
 	groups       []store.Group
 	selectedNav  string
@@ -114,6 +132,7 @@ func New(s *store.Store, opts ...Option) (*App, error) {
 	a := &App{
 		store:            s,
 		client:           &http.Client{Timeout: 15 * time.Second},
+		allocateAPI:      allocateClashAPI,
 		quit:             mygo.App.Quit,
 		groups:           groups,
 		selectedNav:      selectedNav,
@@ -307,6 +326,20 @@ func (a *App) connectNode(groupName string, nodeIndex int) {
 		return
 	}
 
+	api, err := a.allocateAPI()
+	if err != nil {
+		a.errMsg = err.Error()
+		return
+	}
+	if api.addr != "" {
+		cfg.Experimental = &option.ExperimentalOptions{
+			ClashAPI: &option.ClashAPIOptions{
+				ExternalController: api.addr,
+				Secret:             api.secret,
+			},
+		}
+	}
+
 	configJSON, err := marshalJSON(cfg)
 	if err != nil {
 		a.errMsg = err.Error()
@@ -320,6 +353,7 @@ func (a *App) connectNode(groupName string, nodeIndex int) {
 		nodeTag:    extractTag(g.Nodes[nodeIndex]),
 		nodeIndex:  nodeIndex,
 		configJSON: configJSON,
+		api:        api,
 	}
 	a.runner.connect(req, a.dispatchUI, func(err error) {
 		if err != nil {
