@@ -41,12 +41,14 @@ class SingerWidgetProvider : AppWidgetProvider() {
                     subtitle = "$tag · Tap to stop"
                     clickIntent = stopPendingIntent(app)
                 }
+
                 VpnIpc.STATE_STARTING -> {
                     dotRes = R.drawable.widget_dot_starting
                     val tag = snapshot.nodeTag.ifEmpty { "Starting" }
                     subtitle = "$tag · Starting…"
                     clickIntent = stopPendingIntent(app)
                 }
+
                 else -> {
                     dotRes = R.drawable.widget_dot_inactive
                     subtitle = "Disconnected"

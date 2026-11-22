@@ -34,18 +34,18 @@ import io.nekohasekai.libbox.InterfaceUpdateListener
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.LocalDNSTransport
 import io.nekohasekai.libbox.NeighborUpdateListener
+import io.nekohasekai.libbox.NetworkInterface as LibboxNetworkInterface
 import io.nekohasekai.libbox.NetworkInterfaceIterator
 import io.nekohasekai.libbox.Notification
 import io.nekohasekai.libbox.OverrideOptions
 import io.nekohasekai.libbox.PlatformInterface
 import io.nekohasekai.libbox.PlatformUser
-import io.nekohasekai.libbox.ShellSession
 import io.nekohasekai.libbox.SetupOptions
+import io.nekohasekai.libbox.ShellSession
 import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.SystemProxyStatus
 import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.libbox.WIFIState
-import io.nekohasekai.libbox.NetworkInterface as LibboxNetworkInterface
 import java.io.File
 import java.net.Inet6Address
 import java.net.InetAddress
@@ -56,7 +56,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
+class SingerVpnService :
+    VpnService(),
+    CommandServerHandler,
+    PlatformInterface {
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     private val worker = Executors.newSingleThreadExecutor()
     private val dnsExecutor = Executors.newCachedThreadPool()
@@ -76,10 +79,12 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
                     synchronized(clients) { clients.add(client) }
                     sendSnapshot(client, currentSnapshot)
                 }
+
                 VpnIpc.MSG_UNREGISTER -> {
                     val client = msg.replyTo ?: return
                     synchronized(clients) { clients.remove(client) }
                 }
+
                 VpnIpc.MSG_STOP -> requestStop()
             }
         }
@@ -151,6 +156,7 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
                     }
                 }
             }
+
             ACTION_STOP -> requestStop()
         }
         return START_NOT_STICKY
@@ -519,9 +525,7 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
 
     override fun usePlatformShell(): Boolean = false
 
-    override fun checkPlatformShell() {
-        throw UnsupportedOperationException("not supported")
-    }
+    override fun checkPlatformShell(): Unit = throw UnsupportedOperationException("not supported")
 
     override fun openShellSession(
         user: PlatformUser?,
@@ -542,8 +546,7 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
 
     override fun usePlatformBridge(): Boolean = false
 
-    override fun createBridge(options: BridgeOptions?): BridgeSession =
-        throw UnsupportedOperationException("not supported")
+    override fun createBridge(options: BridgeOptions?): BridgeSession = throw UnsupportedOperationException("not supported")
 
     private fun registerNetworkMonitor() {
         if (networkCallback != null) return

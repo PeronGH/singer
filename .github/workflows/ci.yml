@@ -49,6 +49,35 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Cache Kotlin linters
+        id: kotlin-linters-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/kotlin-linters
+          key: kotlin-linters-ktlint-1.8.0-detekt-1.23.8
+
+      - name: Lint Kotlin (ktlint & detekt)
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cache/kotlin-linters
+          if [[ ! -x ~/.cache/kotlin-linters/ktlint ]]; then
+            curl -fLsS https://github.com/pinterest/ktlint/releases/download/1.8.0/ktlint \
+              -o ~/.cache/kotlin-linters/ktlint
+            chmod +x ~/.cache/kotlin-linters/ktlint
+          fi
+          if [[ ! -f ~/.cache/kotlin-linters/detekt-cli.jar ]]; then
+            curl -fLsS https://github.com/detekt/detekt/releases/download/v1.23.8/detekt-cli-1.23.8-all.jar \
+              -o ~/.cache/kotlin-linters/detekt-cli.jar
+          fi
+          ~/.cache/kotlin-linters/ktlint \
+            "internal/androidvpn/kotlin/**/*.kt" \
+            "internal/androidvpn/kotlin/**/*.kts" \
+            "!**/*.mygo.kt"
+          java -jar ~/.cache/kotlin-linters/detekt-cli.jar \
+            --config .detekt.yml \
+            --input internal/androidvpn/kotlin/src/main/kotlin \
+            --excludes "**/*.mygo.kt"
+
       - name: Resolve sing-box version
         id: versions
         run: |
@@ -95,3 +124,9 @@ jobs:
           set -euo pipefail
           mygo_ver="$(go list -m -f '{{.Version}}' github.com/egoist/mygo)"
           go run "github.com/egoist/mygo/cmd/mygo@${mygo_ver}" build -platform android/arm64
+
+      - name: Run Android Lint
+        run: |
+          set -euo pipefail
+          ORG_GRADLE_PROJECT_mygoNativeModules="native-androidvpn|${GITHUB_WORKSPACE}/internal/androidvpn/kotlin" \
+            .mygo/android/gradlew -p .mygo/android :native-androidvpn:lintRelease --console=plain

@@ -8,6 +8,11 @@ android {
     defaultConfig {
         consumerProguardFiles("consumer-rules.pro")
     }
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = true
+        disable += setOf("GradleDependency", "OldTargetApi", "NewerVersionAvailable")
+    }
 }
 
 dependencies {
