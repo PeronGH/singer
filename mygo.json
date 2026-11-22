@@ -18,7 +18,8 @@
     },
     "permissions": [
       "FOREGROUND_SERVICE",
-      "FOREGROUND_SERVICE_SPECIAL_USE"
+      "FOREGROUND_SERVICE_SPECIAL_USE",
+      "POST_NOTIFICATIONS"
     ]
   }
 }

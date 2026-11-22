@@ -48,6 +48,11 @@ func main() {
 			app.Shutdown()
 		}
 	})
+	mygo.App.OnDidBecomeActive(func() {
+		if app != nil {
+			app.SyncRuntime()
+		}
+	})
 	mygo.App.WhenReady(func() {
 		if app == nil {
 			baseDir, err := mygo.App.Path(mygo.PathAppData)

@@ -2,6 +2,7 @@ package com.github.perongh.singer.internal.androidvpn
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
@@ -75,12 +76,30 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
             ACTION_START -> {
                 val config = intent.getStringExtra(EXTRA_CONFIG) ?: ""
                 val tunMode = intent.getBooleanExtra(EXTRA_TUN_MODE, false)
+                val groupName = intent.getStringExtra(EXTRA_GROUP_NAME) ?: ""
+                val nodeTag = intent.getStringExtra(EXTRA_NODE_TAG) ?: ""
+                val nodeIndex = intent.getIntExtra(EXTRA_NODE_INDEX, -1)
+                val apiAddr = intent.getStringExtra(EXTRA_API_ADDR) ?: ""
+                val apiSecret = intent.getStringExtra(EXTRA_API_SECRET) ?: ""
                 @Suppress("DEPRECATION")
                 val receiver = intent.getParcelableExtra<ResultReceiver>(EXTRA_RECEIVER)
-                promoteForeground(tunMode)
+                promoteForeground(nodeTag, tunMode)
+                val session = StoredVpnState(
+                    running = true,
+                    pid = Process.myPid(),
+                    configJSON = config,
+                    tunMode = tunMode,
+                    groupName = groupName,
+                    nodeTag = nodeTag,
+                    nodeIndex = nodeIndex,
+                    apiAddr = apiAddr,
+                    apiSecret = apiSecret,
+                )
                 worker.execute {
                     try {
                         startLibbox(config)
+                        VpnStateStore.write(this, session)
+                        SingerTileService.requestUpdate(this)
                         receiver?.send(RESULT_OK, null)
                     } catch (e: Throwable) {
                         Log.e(TAG, "start sing-box failed", e)
@@ -117,20 +136,48 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
         super.onDestroy()
     }
 
-    private fun promoteForeground(tunMode: Boolean) {
+    private fun promoteForeground(nodeTag: String, tunMode: Boolean) {
         val manager = getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(CHANNEL_ID) == null) {
             manager.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "Singer VPN", NotificationManager.IMPORTANCE_LOW),
             )
         }
-        val text = if (tunMode) "VPN tunnel active" else "Local proxy active"
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val modeLabel = if (tunMode) "VPN" else "Local proxy"
+        val text = if (nodeTag.isNotEmpty()) "$nodeTag · $modeLabel" else "$modeLabel active"
+
+        val stopIntent = Intent(this, SingerVpnService::class.java).apply {
+            action = ACTION_STOP
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            1,
+            stopIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Singer")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setSmallIcon(R.drawable.ic_stat_singer)
             .setOngoing(true)
-            .build()
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .addAction(0, "Stop", stopPendingIntent)
+
+        packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val openPendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                launch,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            builder.setContentIntent(openPendingIntent)
+        }
+
+        val notification = builder.build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -155,14 +202,14 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
 
     private fun startLibbox(configJSON: String) {
         ensureLibboxSetup()
-        stopLibbox()
+        stopLibbox(removeForeground = false)
         val server = Libbox.newCommandServer(this, this)
         commandServer = server
         server.start()
         server.startOrReloadService(configJSON, OverrideOptions())
     }
 
-    private fun stopLibbox() {
+    private fun stopLibbox(removeForeground: Boolean = true) {
         unregisterNetworkMonitor()
         val server = commandServer
         commandServer = null
@@ -175,7 +222,11 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
         if (pfd != null) {
             runCatching { pfd.close() }
         }
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        if (removeForeground) {
+            VpnStateStore.markStopped(this)
+            SingerTileService.requestUpdate(this)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        }
     }
 
     // CommandServerHandler
@@ -568,10 +619,15 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
         private const val CHANNEL_ID = "singer_vpn"
         private const val NOTIFICATION_ID = 1001
 
-        const val ACTION_START = "com.perongh.singer.action.START"
-        const val ACTION_STOP = "com.perongh.singer.action.STOP"
+        const val ACTION_START = "uk.ihack.singer.action.START"
+        const val ACTION_STOP = "uk.ihack.singer.action.STOP"
         const val EXTRA_CONFIG = "config"
         const val EXTRA_TUN_MODE = "tun_mode"
+        const val EXTRA_GROUP_NAME = "group_name"
+        const val EXTRA_NODE_TAG = "node_tag"
+        const val EXTRA_NODE_INDEX = "node_index"
+        const val EXTRA_API_ADDR = "api_addr"
+        const val EXTRA_API_SECRET = "api_secret"
         const val EXTRA_RECEIVER = "receiver"
         const val EXTRA_ERROR = "error"
         const val RESULT_OK = 0

@@ -42,6 +42,8 @@ type processHandle interface {
 }
 
 type processStarter func(ctx context.Context, req runRequest, onLine func(string), onDone func(error)) (processHandle, error)
+type externalProber func() (runRequest, bool)
+type externalAttacher func(req runRequest, onLine func(string), onDone func(error)) (processHandle, error)
 
 type runner struct {
 	mu              sync.Mutex
@@ -49,12 +51,15 @@ type runner struct {
 	startCancel     context.CancelFunc
 	closed          bool
 	startProcess    processStarter
+	probeExternal   externalProber
+	attachExternal  externalAttacher
 	lookPath        func(string) (string, error)
 	metricsClient   *http.Client
 	metricsInterval time.Duration
 	metricsCancel   context.CancelFunc
 	metricsRunID    uint64
 	runSeq          uint64
+	syncingExternal bool
 
 	starting    bool
 	active      bool
@@ -75,6 +80,8 @@ func newRunner(starter processStarter) *runner {
 	}
 	return &runner{
 		startProcess:    starter,
+		probeExternal:   probeExternalProcess,
+		attachExternal:  attachExternalProcess,
 		lookPath:        defaultLookPath,
 		metricsClient:   newLocalHTTPClient(),
 		metricsInterval: defaultMetricsInterval,
@@ -359,4 +366,69 @@ func (r *runner) isNodeStarting(groupName string, nodeIndex int) bool {
 
 func (r *runner) isNodeActive(groupName string, nodeIndex int) bool {
 	return r.active && r.activeGroup == groupName && r.activeIndex == nodeIndex
+}
+
+func (r *runner) syncExternal(dispatch func(func()), onAttach func(runRequest), onErr func(error)) {
+	if r.busy() || r.syncingExternal || r.probeExternal == nil || r.attachExternal == nil {
+		return
+	}
+	r.mu.Lock()
+	closed := r.closed
+	r.mu.Unlock()
+	if closed {
+		return
+	}
+
+	r.syncingExternal = true
+	probe := r.probeExternal
+	attach := r.attachExternal
+	go func() {
+		req, ok := probe()
+		dispatch(func() {
+			r.syncingExternal = false
+			r.mu.Lock()
+			isClosed := r.closed
+			r.mu.Unlock()
+			if !ok || isClosed || r.busy() {
+				return
+			}
+
+			r.runSeq++
+			runID := r.runSeq
+			onLine := func(line string) {
+				dispatch(func() {
+					r.append(logKindOutput, line)
+				})
+			}
+			onDone := func(err error) {
+				dispatch(func() {
+					if r.runSeq == runID {
+						r.finish(err, dispatch, onErr)
+					}
+				})
+			}
+
+			proc, err := attach(req, onLine, onDone)
+			if err != nil || proc == nil {
+				return
+			}
+
+			r.mu.Lock()
+			r.proc = proc
+			r.mu.Unlock()
+
+			r.starting = false
+			r.active = true
+			r.stopping = false
+			r.activeGroup = req.groupName
+			r.activeTag = req.nodeTag
+			r.activeIndex = req.nodeIndex
+			r.metrics = trafficMetrics{}
+			r.append(logKindStart, fmt.Sprintf("attached to running sing-box (%s / %s)", req.groupName, req.nodeTag))
+			if onAttach != nil {
+				onAttach(req)
+			}
+			r.startMetrics(req.api, dispatch)
+		})
+	}()
 }

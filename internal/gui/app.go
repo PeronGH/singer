@@ -71,6 +71,13 @@ func withMetricsInterval(d time.Duration) Option {
 	}
 }
 
+func withExternalRuntime(probe externalProber, attach externalAttacher) Option {
+	return func(a *App) {
+		a.runner.probeExternal = probe
+		a.runner.attachExternal = attach
+	}
+}
+
 type toastRequest struct {
 	message     string
 	actionLabel string
@@ -157,6 +164,25 @@ func (a *App) AttachWindow(win *mygo.Window) {
 	if a.dispatch == nil && win != nil {
 		a.dispatch = win.Update
 	}
+	a.SyncRuntime()
+}
+
+// SyncRuntime reconciles UI state with an already-running external VPN service
+// (for example, one started from the Android Quick Settings tile).
+func (a *App) SyncRuntime() {
+	a.runner.syncExternal(
+		a.dispatchUI,
+		func(req runRequest) {
+			a.tunMode = req.tunMode
+		},
+		func(err error) {
+			if err != nil {
+				a.errMsg = err.Error()
+			} else {
+				a.errMsg = ""
+			}
+		},
+	)
 }
 
 // Shutdown stops any running sing-box process and cancels queued restarts.

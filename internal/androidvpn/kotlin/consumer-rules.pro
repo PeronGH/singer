@@ -1,4 +1,5 @@
 -keep class io.nekohasekai.libbox.** { *; }
 -keep class go.** { *; }
 -keep class com.github.perongh.singer.internal.androidvpn.SingerVpnService { *; }
+-keep class com.github.perongh.singer.internal.androidvpn.SingerTileService { *; }
 -keep class com.github.perongh.singer.internal.androidvpn.MygoModule { *; }

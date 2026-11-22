@@ -723,3 +723,40 @@ func TestRemoteFetchingStateForNewAndExistingGroup(t *testing.T) {
 		t.Fatal("expected errMsg after failed remote fetch")
 	}
 }
+
+func TestSyncExternalRuntimeAttachesRunningSession(t *testing.T) {
+	var attachedProc *fakeProcess
+	app, _, events := newTestApp(t, []string{
+		"socks://10.0.0.1:1080#alpha",
+	}, withExternalRuntime(
+		func() (runRequest, bool) {
+			return runRequest{
+				groupName: "local",
+				nodeTag:   "alpha",
+				nodeIndex: 0,
+				tunMode:   true,
+			}, true
+		},
+		func(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
+			attachedProc = newFakeProcess(onLine, onDone)
+			return attachedProc, nil
+		},
+	))
+	tt := ui.NewTester(app.View, 960, 640)
+
+	app.SyncRuntime()
+	drainEvents(t, events, tt, true)
+
+	if !app.runner.active || app.runner.activeTag != "alpha" || !app.tunMode {
+		t.Fatalf("expected attached active session, active=%v tag=%q tun=%v", app.runner.active, app.runner.activeTag, app.tunMode)
+	}
+	if !tt.HasText("Connected") || !tt.HasText("Active") {
+		t.Fatalf("expected Connected and Active indicators, texts=%q", tt.Texts())
+	}
+
+	attachedProc.exit(nil)
+	drainEvents(t, events, tt, true)
+	if app.runner.active {
+		t.Fatal("expected runner to transition to inactive when external process exits")
+	}
+}

@@ -83,3 +83,11 @@ func startSingBoxProcess(ctx context.Context, req runRequest, onLine func(string
 
 	return execProcess{cmd: cmd, done: done}, nil
 }
+
+func probeExternalProcess() (runRequest, bool) {
+	return runRequest{}, false
+}
+
+func attachExternalProcess(runRequest, func(string), func(error)) (processHandle, error) {
+	return nil, nil
+}

@@ -46,10 +46,50 @@ func startSingBoxProcess(ctx context.Context, req runRequest, onLine func(string
 		return nil, err
 	}
 
-	if err := svc.Start(ctx, string(req.configJSON), req.tunMode); err != nil {
+	startReq := androidvpn.StartRequest{
+		ConfigJSON: string(req.configJSON),
+		TunMode:    req.tunMode,
+		GroupName:  req.groupName,
+		NodeTag:    req.nodeTag,
+		NodeIndex:  req.nodeIndex,
+		APIAddr:    req.api.addr,
+		APISecret:  req.api.secret,
+	}
+	if err := svc.Start(ctx, startReq); err != nil {
 		return nil, err
 	}
 
+	logCtx, cancel := context.WithCancel(context.Background())
+	go streamClashLogs(logCtx, req.api, onLine, onDone)
+	return &androidProcess{svc: svc, cancel: cancel}, nil
+}
+
+func probeExternalProcess() (runRequest, bool) {
+	svc, err := androidvpn.NewService()
+	if err != nil {
+		return runRequest{}, false
+	}
+	st, err := svc.Status()
+	if err != nil || !st.Running {
+		return runRequest{}, false
+	}
+	return runRequest{
+		groupName: st.GroupName,
+		nodeTag:   st.NodeTag,
+		nodeIndex: st.NodeIndex,
+		tunMode:   st.TunMode,
+		api: clashAPIInfo{
+			addr:   st.APIAddr,
+			secret: st.APISecret,
+		},
+	}, true
+}
+
+func attachExternalProcess(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
+	svc, err := androidvpn.NewService()
+	if err != nil {
+		return nil, err
+	}
 	logCtx, cancel := context.WithCancel(context.Background())
 	go streamClashLogs(logCtx, req.api, onLine, onDone)
 	return &androidProcess{svc: svc, cancel: cancel}, nil
