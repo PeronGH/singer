@@ -41,6 +41,12 @@ type processHandle interface {
 	Stop() error
 }
 
+// processDetacher is implemented by out-of-process services (such as Android's :vpn)
+// that outlive the UI process and only need local streams torn down on UI detach/exit.
+type processDetacher interface {
+	Detach()
+}
+
 type externalEvent struct {
 	running bool
 	req     runRequest
@@ -339,7 +345,11 @@ func (r *runner) shutdown() {
 		startCancel()
 	}
 	if proc != nil {
-		_ = proc.Stop()
+		if d, ok := proc.(processDetacher); ok {
+			d.Detach()
+		} else {
+			_ = proc.Stop()
+		}
 	}
 }
 
@@ -404,6 +414,12 @@ func (r *runner) startWatcher(dispatch func(func()), onAttach func(runRequest), 
 
 			if !ev.running {
 				if r.active && !r.starting {
+					r.mu.Lock()
+					proc := r.proc
+					r.mu.Unlock()
+					if d, ok := proc.(processDetacher); ok {
+						d.Detach()
+					}
 					r.finish(nil, dispatch, onErr)
 				}
 				return

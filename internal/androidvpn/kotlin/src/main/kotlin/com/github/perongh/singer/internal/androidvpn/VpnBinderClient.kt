@@ -81,6 +81,34 @@ internal object VpnBinderClient {
         return this
     }
 
+    /**
+     * Holds a temporary BIND_AUTO_CREATE binding while a start() call is in flight so
+     * Android guarantees onServiceConnected runs and :vpn is not destroyed before
+     * delivering STATE_RUNNING or STATE_ERROR.
+     */
+    fun acquireStartBinding(context: Context): AutoCloseable {
+        val app = context.applicationContext
+        ensureBound(app)
+        val startConn = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, service: IBinder?) = Unit
+            override fun onServiceDisconnected(name: ComponentName?) {
+                onDisconnected()
+            }
+            override fun onBindingDied(name: ComponentName?) {
+                onDisconnected()
+            }
+        }
+        val intent = Intent(app, SingerVpnService::class.java).apply {
+            action = VpnIpc.ACTION_BIND
+        }
+        val ok = runCatching { app.bindService(intent, startConn, Context.BIND_AUTO_CREATE) }.getOrDefault(false)
+        return AutoCloseable {
+            if (ok) {
+                runCatching { app.unbindService(startConn) }
+            }
+        }
+    }
+
     fun statusFlow(): Flow<Status> = _snapshots
         .map { it.toStatus() }
         .distinctUntilChanged()

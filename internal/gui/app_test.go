@@ -724,8 +724,29 @@ func TestRemoteFetchingStateForNewAndExistingGroup(t *testing.T) {
 	}
 }
 
+type detachableFakeProcess struct {
+	*fakeProcess
+	detached bool
+}
+
+func (p *detachableFakeProcess) Detach() {
+	p.mu.Lock()
+	p.detached = true
+	p.mu.Unlock()
+}
+
+func (p *detachableFakeProcess) isDetached() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.detached
+}
+
 func TestExternalWatcherAttachesAndDetachesSession(t *testing.T) {
 	extCh := make(chan externalEvent, 4)
+	var (
+		mu       sync.Mutex
+		attached []*detachableFakeProcess
+	)
 	app, _, events := newTestApp(t, []string{
 		"socks://10.0.0.1:1080#alpha",
 	}, withExternalWatcher(
@@ -740,7 +761,11 @@ func TestExternalWatcherAttachesAndDetachesSession(t *testing.T) {
 			}
 		},
 		func(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
-			return newFakeProcess(onLine, onDone), nil
+			p := &detachableFakeProcess{fakeProcess: newFakeProcess(onLine, onDone)}
+			mu.Lock()
+			attached = append(attached, p)
+			mu.Unlock()
+			return p, nil
 		},
 	))
 	defer app.Shutdown()
@@ -770,5 +795,30 @@ func TestExternalWatcherAttachesAndDetachesSession(t *testing.T) {
 	drainEvents(t, events, tt, true)
 	if app.runner.active {
 		t.Fatal("expected runner to transition to inactive when Binder pushes stopped")
+	}
+	mu.Lock()
+	first := attached[0]
+	mu.Unlock()
+	if !first.isDetached() || first.isStopped() {
+		t.Fatalf("external stop should detach local stream without sending Stop: detached=%v stopped=%v", first.isDetached(), first.isStopped())
+	}
+
+	// Re-attach and verify UI Shutdown detaches rather than killing external VPN service.
+	extCh <- externalEvent{
+		running: true,
+		req: runRequest{
+			groupName: "local",
+			nodeTag:   "alpha",
+			nodeIndex: 0,
+			tunMode:   true,
+		},
+	}
+	drainEvents(t, events, tt, true)
+	app.Shutdown()
+	mu.Lock()
+	second := attached[1]
+	mu.Unlock()
+	if !second.isDetached() || second.isStopped() {
+		t.Fatalf("Shutdown on detachable handle should detach without stopping service: detached=%v stopped=%v", second.isDetached(), second.isStopped())
 	}
 }

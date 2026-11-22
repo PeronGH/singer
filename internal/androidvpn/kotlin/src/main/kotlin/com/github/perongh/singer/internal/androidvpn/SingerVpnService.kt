@@ -54,6 +54,7 @@ import java.net.InterfaceAddress
 import java.net.NetworkInterface
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
@@ -61,6 +62,8 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
     private val dnsExecutor = Executors.newCachedThreadPool()
     private val ipcThread = HandlerThread("singer-vpn-ipc").apply { start() }
     private val clients = LinkedHashSet<Messenger>()
+    private val libboxLock = Any()
+    private val generation = AtomicLong(0L)
 
     @Volatile
     private var currentSnapshot = VpnSnapshot()
@@ -77,12 +80,7 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
                     val client = msg.replyTo ?: return
                     synchronized(clients) { clients.remove(client) }
                 }
-                VpnIpc.MSG_STOP -> {
-                    worker.execute {
-                        stopLibbox(removeForeground = true, emitStopped = true)
-                        stopSelf()
-                    }
-                }
+                VpnIpc.MSG_STOP -> requestStop()
             }
         }
     }
@@ -121,6 +119,7 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
                 val nodeIndex = intent.getIntExtra(EXTRA_NODE_INDEX, -1)
                 val apiAddr = intent.getStringExtra(EXTRA_API_ADDR) ?: ""
                 val apiSecret = intent.getStringExtra(EXTRA_API_SECRET) ?: ""
+                val gen = generation.incrementAndGet()
                 promoteForeground(nodeTag, tunMode)
                 val baseSnapshot = VpnSnapshot(
                     state = VpnIpc.STATE_STARTING,
@@ -133,12 +132,18 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
                     apiSecret = apiSecret,
                 )
                 publishState(baseSnapshot)
-                worker.execute {
+                submitWorker {
+                    if (generation.get() != gen) return@submitWorker
                     try {
                         startLibbox(config)
+                        if (generation.get() != gen) {
+                            stopLibbox(removeForeground = false, emitStopped = false)
+                            return@submitWorker
+                        }
                         publishState(baseSnapshot.copy(state = VpnIpc.STATE_RUNNING))
                     } catch (e: Throwable) {
                         Log.e(TAG, "start sing-box failed", e)
+                        if (generation.get() != gen) return@submitWorker
                         val msg = e.message ?: e.toString()
                         stopLibbox(removeForeground = true, emitStopped = false)
                         publishState(baseSnapshot.copy(state = VpnIpc.STATE_ERROR, error = msg))
@@ -146,30 +151,37 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
                     }
                 }
             }
-            ACTION_STOP -> {
-                worker.execute {
-                    stopLibbox(removeForeground = true, emitStopped = true)
-                    stopSelf()
-                }
-            }
+            ACTION_STOP -> requestStop()
         }
         return START_NOT_STICKY
     }
 
     override fun onRevoke() {
-        worker.execute {
-            stopLibbox(removeForeground = true, emitStopped = true)
-            stopSelf()
-        }
+        requestStop()
         super.onRevoke()
     }
 
     override fun onDestroy() {
-        stopLibbox(removeForeground = true, emitStopped = currentSnapshot.state != VpnIpc.STATE_ERROR)
+        generation.incrementAndGet()
         worker.shutdownNow()
         dnsExecutor.shutdownNow()
+        stopLibbox(removeForeground = true, emitStopped = currentSnapshot.state != VpnIpc.STATE_ERROR)
         ipcThread.quitSafely()
         super.onDestroy()
+    }
+
+    private fun requestStop() {
+        val gen = generation.incrementAndGet()
+        submitWorker {
+            if (generation.get() != gen) return@submitWorker
+            stopLibbox(removeForeground = true, emitStopped = true)
+            stopSelf()
+        }
+    }
+
+    private fun submitWorker(task: () -> Unit) {
+        if (worker.isShutdown) return
+        runCatching { worker.execute(task) }
     }
 
     private fun publishState(snapshot: VpnSnapshot) {
@@ -254,7 +266,7 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
         Libbox.setup(opts)
     }
 
-    private fun startLibbox(configJSON: String) {
+    private fun startLibbox(configJSON: String) = synchronized(libboxLock) {
         ensureLibboxSetup()
         stopLibbox(removeForeground = false, emitStopped = false)
         val server = Libbox.newCommandServer(this, this)
@@ -263,7 +275,7 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
         server.startOrReloadService(configJSON, OverrideOptions())
     }
 
-    private fun stopLibbox(removeForeground: Boolean = true, emitStopped: Boolean = true) {
+    private fun stopLibbox(removeForeground: Boolean = true, emitStopped: Boolean = true) = synchronized(libboxLock) {
         unregisterNetworkMonitor()
         val server = commandServer
         commandServer = null
@@ -287,10 +299,7 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
     // CommandServerHandler
 
     override fun serviceStop() {
-        worker.execute {
-            stopLibbox()
-            stopSelf()
-        }
+        requestStop()
     }
 
     override fun serviceReload() {}
@@ -615,8 +624,11 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
             val active = defaultNetwork ?: connectivity.activeNetwork
                 ?: throw IllegalStateException("no active network")
             val signal = CancellationSignal()
-            ctx.onCancel { signal.cancel() }
             val latch = java.util.concurrent.CountDownLatch(1)
+            ctx.onCancel {
+                signal.cancel()
+                latch.countDown()
+            }
             DnsResolver.getInstance().rawQuery(
                 active,
                 message,

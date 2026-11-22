@@ -42,28 +42,30 @@ private class AndroidVpnController : Service {
         val runId = nextRunId.incrementAndGet()
         val disconnectBaseline = client.disconnectCount.value
 
-        val intent = Intent(context, SingerVpnService::class.java).apply {
-            action = SingerVpnService.ACTION_START
-            putExtra(SingerVpnService.EXTRA_RUN_ID, runId)
-            putExtra(SingerVpnService.EXTRA_CONFIG, req.configJSON)
-            putExtra(SingerVpnService.EXTRA_TUN_MODE, req.tunMode)
-            putExtra(SingerVpnService.EXTRA_GROUP_NAME, req.groupName)
-            putExtra(SingerVpnService.EXTRA_NODE_TAG, req.nodeTag)
-            putExtra(SingerVpnService.EXTRA_NODE_INDEX, req.nodeIndex.toInt())
-            putExtra(SingerVpnService.EXTRA_API_ADDR, req.apiAddr)
-            putExtra(SingerVpnService.EXTRA_API_SECRET, req.apiSecret)
-        }
-        ContextCompat.startForegroundService(context, intent)
+        val (terminal, _) = client.acquireStartBinding(context).use {
+            val intent = Intent(context, SingerVpnService::class.java).apply {
+                action = SingerVpnService.ACTION_START
+                putExtra(SingerVpnService.EXTRA_RUN_ID, runId)
+                putExtra(SingerVpnService.EXTRA_CONFIG, req.configJSON)
+                putExtra(SingerVpnService.EXTRA_TUN_MODE, req.tunMode)
+                putExtra(SingerVpnService.EXTRA_GROUP_NAME, req.groupName)
+                putExtra(SingerVpnService.EXTRA_NODE_TAG, req.nodeTag)
+                putExtra(SingerVpnService.EXTRA_NODE_INDEX, req.nodeIndex.toInt())
+                putExtra(SingerVpnService.EXTRA_API_ADDR, req.apiAddr)
+                putExtra(SingerVpnService.EXTRA_API_SECRET, req.apiSecret)
+            }
+            ContextCompat.startForegroundService(context, intent)
 
-        val (terminal, _) = try {
-            combine(client.snapshots, client.disconnectCount) { snap, disconnects -> snap to disconnects }
-                .first { (snap, disconnects) ->
-                    (snap.runId == runId && snap.state != VpnIpc.STATE_STARTING) ||
-                        (snap.state == VpnIpc.STATE_STOPPED && disconnects > disconnectBaseline)
-                }
-        } catch (e: CancellationException) {
-            stop()
-            throw e
+            try {
+                combine(client.snapshots, client.disconnectCount) { snap, disconnects -> snap to disconnects }
+                    .first { (snap, disconnects) ->
+                        (snap.runId == runId && snap.state != VpnIpc.STATE_STARTING) ||
+                            (snap.state == VpnIpc.STATE_STOPPED && disconnects > disconnectBaseline)
+                    }
+            } catch (e: CancellationException) {
+                stop()
+                throw e
+            }
         }
 
         when (terminal.state) {

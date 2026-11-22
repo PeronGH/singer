@@ -20,16 +20,25 @@ func defaultLookPath(string) (string, error) {
 	return "", nil
 }
 
+var getAndroidService = sync.OnceValues(androidvpn.NewService)
+
 type androidProcess struct {
-	svc    androidvpn.Service
-	cancel context.CancelFunc
-	once   sync.Once
+	svc        androidvpn.Service
+	cancel     context.CancelFunc
+	stopOnce   sync.Once
+	detachOnce sync.Once
+}
+
+func (p *androidProcess) Detach() {
+	p.detachOnce.Do(func() {
+		p.cancel()
+	})
 }
 
 func (p *androidProcess) Stop() error {
 	var err error
-	p.once.Do(func() {
-		p.cancel()
+	p.Detach()
+	p.stopOnce.Do(func() {
 		err = p.svc.Stop()
 	})
 	return err
@@ -41,7 +50,7 @@ type clashLogMessage struct {
 }
 
 func startSingBoxProcess(ctx context.Context, req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
-	svc, err := androidvpn.NewService()
+	svc, err := getAndroidService()
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +74,7 @@ func startSingBoxProcess(ctx context.Context, req runRequest, onLine func(string
 }
 
 func watchExternalProcess(ctx context.Context, onEvent func(externalEvent)) {
-	svc, err := androidvpn.NewService()
+	svc, err := getAndroidService()
 	if err != nil {
 		return
 	}
@@ -90,7 +99,7 @@ func watchExternalProcess(ctx context.Context, onEvent func(externalEvent)) {
 }
 
 func attachExternalProcess(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
-	svc, err := androidvpn.NewService()
+	svc, err := getAndroidService()
 	if err != nil {
 		return nil, err
 	}
