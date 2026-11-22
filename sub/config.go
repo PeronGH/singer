@@ -88,7 +88,7 @@ func tunConfig(outbounds []option.Outbound, outboundTag string) option.Options {
 	})
 
 	remoteDNS := &option.RemoteHTTPSDNSServerOptions{}
-	remoteDNS.Server = "1.1.1.1"
+	remoteDNS.Server = "8.8.8.8"
 	remoteDNS.Detour = outboundTag
 
 	return option.Options{
