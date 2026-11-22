@@ -11,6 +11,8 @@ android {
     lint {
         abortOnError = true
         checkReleaseBuilds = true
+        textReport = true
+        textOutput = file("stdout")
         disable += setOf("GradleDependency", "OldTargetApi", "NewerVersionAvailable")
     }
 }

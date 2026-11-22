@@ -1,0 +1,4 @@
+<resources>
+    <string name="singer_widget_title">Singer</string>
+    <string name="singer_widget_disconnected">Disconnected</string>
+</resources>

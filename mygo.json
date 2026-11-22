@@ -17,6 +17,7 @@
       "background": "#0F172A"
     },
     "permissions": [
+      "ACCESS_NETWORK_STATE",
       "FOREGROUND_SERVICE",
       "FOREGROUND_SERVICE_SPECIAL_USE",
       "POST_NOTIFICATIONS"
