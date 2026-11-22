@@ -28,6 +28,8 @@ func ParseLine(line string) (option.Outbound, error) {
 	}
 
 	switch u.Scheme {
+	case "vless":
+		return parseVLESS(u)
 	case "trojan":
 		return parseTrojan(u)
 	case "hy2", "hysteria2":
@@ -126,7 +128,7 @@ func serverOptions(u *url.URL) (option.ServerOptions, error) {
 
 func defaultPort(scheme string) uint16 {
 	switch scheme {
-	case "https", "trojan", "hy2", "hysteria2":
+	case "https", "vless", "trojan", "hy2", "hysteria2":
 		return 443
 	case "http":
 		return 80
@@ -135,6 +137,16 @@ func defaultPort(scheme string) uint16 {
 	default:
 		return 0
 	}
+}
+
+func dialerOptions(q url.Values) option.DialerOptions {
+	return option.DialerOptions{
+		TCPFastOpen: q.Get("tfo") == "1",
+	}
+}
+
+func isInsecure(q url.Values) bool {
+	return q.Get("allowInsecure") == "1" || q.Get("insecure") == "1"
 }
 
 // outboundTLS builds OutboundTLSOptions from common query parameters.
@@ -154,14 +166,30 @@ func outboundTLS(q url.Values, defaultSNI string) *option.OutboundTLSOptions {
 		tls.ServerName = defaultSNI
 	}
 
-	if q.Get("allowInsecure") == "1" {
+	if isInsecure(q) {
 		tls.Insecure = true
+	}
+
+	if alpn := q.Get("alpn"); alpn != "" {
+		for _, proto := range strings.Split(alpn, ",") {
+			if proto = strings.TrimSpace(proto); proto != "" {
+				tls.ALPN = append(tls.ALPN, proto)
+			}
+		}
 	}
 
 	if fp := q.Get("fp"); fp != "" {
 		tls.UTLS = &option.OutboundUTLSOptions{
 			Enabled:     true,
 			Fingerprint: fp,
+		}
+	}
+
+	if security == "reality" {
+		tls.Reality = &option.OutboundRealityOptions{
+			Enabled:   true,
+			PublicKey: q.Get("pbk"),
+			ShortID:   q.Get("sid"),
 		}
 	}
 
@@ -185,6 +213,14 @@ func v2rayTransport(q url.Values) *option.V2RayTransportOptions {
 			t.WebsocketOptions.Headers = badoption.HTTPHeader{
 				"Host": {host},
 			}
+		}
+		if ed := q.Get("ed"); ed != "" {
+			if n, err := strconv.ParseUint(ed, 10, 32); err == nil {
+				t.WebsocketOptions.MaxEarlyData = uint32(n)
+			}
+		}
+		if eh := q.Get("eh"); eh != "" {
+			t.WebsocketOptions.EarlyDataHeaderName = eh
 		}
 		return t
 	case "grpc":

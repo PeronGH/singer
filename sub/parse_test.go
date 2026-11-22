@@ -390,3 +390,120 @@ func TestParseUnsupportedScheme(t *testing.T) {
 		t.Fatal("expected error for unsupported scheme")
 	}
 }
+
+func TestParseVLESSWS(t *testing.T) {
+	line := `vless://00000000-0000-4000-8000-000000000001@example.com:443?security=tls&sni=sni.example.com&fp=chrome&encryption=none&type=ws&host=sni.example.com&path=%2Fchat#Test-VLESS-WS`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ob.Type != C.TypeVLESS {
+		t.Fatalf("type = %q, want %q", ob.Type, C.TypeVLESS)
+	}
+	if ob.Tag != "Test-VLESS-WS" {
+		t.Fatalf("tag = %q, want %q", ob.Tag, "Test-VLESS-WS")
+	}
+	opts := ob.Options.(*option.VLESSOutboundOptions)
+	if opts.UUID != "00000000-0000-4000-8000-000000000001" {
+		t.Fatalf("uuid = %q", opts.UUID)
+	}
+	if opts.Server != "example.com" || opts.ServerPort != 443 {
+		t.Fatalf("server = %s:%d", opts.Server, opts.ServerPort)
+	}
+	if opts.TLS == nil || !opts.TLS.Enabled || opts.TLS.ServerName != "sni.example.com" {
+		t.Fatal("TLS misconfigured")
+	}
+	if opts.TLS.UTLS == nil || !opts.TLS.UTLS.Enabled || opts.TLS.UTLS.Fingerprint != "chrome" {
+		t.Fatal("uTLS misconfigured")
+	}
+	if opts.Transport == nil || opts.Transport.Type != C.V2RayTransportTypeWebsocket {
+		t.Fatal("transport not websocket")
+	}
+	if opts.Transport.WebsocketOptions.Path != "/chat" {
+		t.Fatalf("ws path = %q", opts.Transport.WebsocketOptions.Path)
+	}
+	if got := opts.Transport.WebsocketOptions.Headers["Host"]; len(got) != 1 || got[0] != "sni.example.com" {
+		t.Fatalf("ws host header = %v", got)
+	}
+}
+
+func TestParseVLESSTCPNoTLS(t *testing.T) {
+	line := `vless://00000000-0000-4000-8000-000000000001@192.0.2.10:8080?security=none&encryption=none&type=tcp&tfo=1#Test-VLESS-TCP`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ob.Options.(*option.VLESSOutboundOptions)
+	if opts.TLS != nil {
+		t.Fatal("expected nil TLS for security=none")
+	}
+	if opts.Transport != nil {
+		t.Fatal("expected nil transport for type=tcp")
+	}
+	if !opts.TCPFastOpen {
+		t.Fatal("expected tcp_fast_open = true for tfo=1")
+	}
+}
+
+func TestParseVLESSReality(t *testing.T) {
+	line := `vless://00000000-0000-4000-8000-000000000001@example.com:443?security=reality&sni=www.example.com&fp=chrome&pbk=pubkey123&sid=abcd&flow=xtls-rprx-vision#Test-Reality`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ob.Options.(*option.VLESSOutboundOptions)
+	if opts.Flow != "xtls-rprx-vision" {
+		t.Fatalf("flow = %q", opts.Flow)
+	}
+	if opts.TLS == nil || !opts.TLS.Enabled || opts.TLS.Reality == nil || !opts.TLS.Reality.Enabled {
+		t.Fatal("reality TLS misconfigured")
+	}
+	if opts.TLS.Reality.PublicKey != "pubkey123" || opts.TLS.Reality.ShortID != "abcd" {
+		t.Fatalf("reality = %+v", opts.TLS.Reality)
+	}
+}
+
+func TestParseVLESSMissingUUID(t *testing.T) {
+	_, err := ParseLine("vless://@example.com:443#no-uuid")
+	if err == nil {
+		t.Fatal("expected error for missing vless uuid")
+	}
+}
+
+func TestParseTrojanWSEarlyDataAndTFO(t *testing.T) {
+	line := `trojan://testpass@example.com:443?security=tls&sni=example.com&fp=chrome&tfo=1&type=ws&host=example.com&path=%2Fws&ed=2560&eh=Sec-WebSocket-Protocol#Test-Trojan-ED`
+	ob, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ob.Options.(*option.TrojanOutboundOptions)
+	if !opts.TCPFastOpen {
+		t.Fatal("expected tcp_fast_open = true")
+	}
+	if opts.Transport == nil || opts.Transport.WebsocketOptions.MaxEarlyData != 2560 {
+		t.Fatalf("max_early_data = %v, want 2560", opts.Transport)
+	}
+	if opts.Transport.WebsocketOptions.EarlyDataHeaderName != "Sec-WebSocket-Protocol" {
+		t.Fatalf("early_data_header_name = %q", opts.Transport.WebsocketOptions.EarlyDataHeaderName)
+	}
+}
+
+func TestParseHTTPSFingerprintAndHy2Insecure(t *testing.T) {
+	ob, err := ParseLine(`https://alice:s3cret@203.0.113.1:443?security=tls&sni=proxy.example.com&fp=chrome#Test-HTTPS-FP`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpOpts := ob.Options.(*option.HTTPOutboundOptions)
+	if httpOpts.TLS == nil || httpOpts.TLS.UTLS == nil || httpOpts.TLS.UTLS.Fingerprint != "chrome" {
+		t.Fatal("expected uTLS fingerprint on https outbound")
+	}
+
+	ob2, err := ParseLine(`hy2://testpass@198.51.100.1:443?sni=example.com&insecure=1#Test-Hy2-Insecure`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hy2Opts := ob2.Options.(*option.Hysteria2OutboundOptions)
+	if hy2Opts.TLS == nil || !hy2Opts.TLS.Insecure {
+		t.Fatal("expected insecure TLS on hy2 with insecure=1")
+	}
+}

@@ -8,6 +8,37 @@ import (
 	"github.com/sagernet/sing-box/option"
 )
 
+func parseVLESS(u *url.URL) (option.Outbound, error) {
+	server, err := serverOptions(u)
+	if err != nil {
+		return option.Outbound{}, err
+	}
+
+	uuid := u.User.Username()
+	if uuid == "" {
+		return option.Outbound{}, fmt.Errorf("vless: missing uuid")
+	}
+
+	q := u.Query()
+	opts := &option.VLESSOutboundOptions{
+		DialerOptions: dialerOptions(q),
+		ServerOptions: server,
+		UUID:          uuid,
+		Flow:          q.Get("flow"),
+		Transport:     v2rayTransport(q),
+	}
+	opts.TLS = outboundTLS(q, server.Server)
+	if pe := q.Get("packetEncoding"); pe != "" {
+		opts.PacketEncoding = &pe
+	}
+
+	return option.Outbound{
+		Type:    C.TypeVLESS,
+		Tag:     u.Fragment,
+		Options: opts,
+	}, nil
+}
+
 func parseTrojan(u *url.URL) (option.Outbound, error) {
 	server, err := serverOptions(u)
 	if err != nil {
@@ -21,6 +52,7 @@ func parseTrojan(u *url.URL) (option.Outbound, error) {
 
 	q := u.Query()
 	opts := &option.TrojanOutboundOptions{
+		DialerOptions: dialerOptions(q),
 		ServerOptions: server,
 		Password:      password,
 		Transport:     v2rayTransport(q),
@@ -56,7 +88,7 @@ func parseHysteria2(u *url.URL) (option.Outbound, error) {
 	if sni := q.Get("sni"); sni != "" {
 		tls.ServerName = sni
 	}
-	if q.Get("allowInsecure") == "1" {
+	if isInsecure(q) {
 		tls.Insecure = true
 	}
 	opts.TLS = tls
@@ -97,8 +129,14 @@ func parseHTTP(u *url.URL, tls bool) (option.Outbound, error) {
 		if sni := q.Get("sni"); sni != "" {
 			tlsOpts.ServerName = sni
 		}
-		if q.Get("allowInsecure") == "1" {
+		if isInsecure(q) {
 			tlsOpts.Insecure = true
+		}
+		if fp := q.Get("fp"); fp != "" {
+			tlsOpts.UTLS = &option.OutboundUTLSOptions{
+				Enabled:     true,
+				Fingerprint: fp,
+			}
 		}
 		opts.TLS = tlsOpts
 	}
