@@ -191,6 +191,7 @@ class SingerVpnService : VpnService(), CommandServerHandler, PlatformInterface {
             sendSnapshot(client, snapshot)
         }
         SingerTileService.requestUpdate(this)
+        runCatching { SingerWidgetProvider.update(this, snapshot) }
     }
 
     private fun sendSnapshot(client: Messenger, snapshot: VpnSnapshot) {

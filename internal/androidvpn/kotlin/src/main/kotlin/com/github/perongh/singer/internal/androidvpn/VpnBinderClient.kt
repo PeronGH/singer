@@ -44,7 +44,9 @@ internal object VpnBinderClient {
         object : Handler(ipcThread.looper) {
             override fun handleMessage(msg: Message) {
                 if (msg.what == VpnIpc.MSG_STATE) {
-                    _snapshots.value = VpnSnapshot.fromBundle(msg.data)
+                    val snap = VpnSnapshot.fromBundle(msg.data)
+                    _snapshots.value = snap
+                    appContext?.let { runCatching { SingerWidgetProvider.update(it, snap) } }
                 }
             }
         },
@@ -143,6 +145,8 @@ internal object VpnBinderClient {
     private fun onDisconnected() {
         serviceMessenger = null
         _disconnectCount.value = _disconnectCount.value + 1
-        _snapshots.value = VpnSnapshot(state = VpnIpc.STATE_STOPPED)
+        val stopped = VpnSnapshot(state = VpnIpc.STATE_STOPPED)
+        _snapshots.value = stopped
+        appContext?.let { runCatching { SingerWidgetProvider.update(it, stopped) } }
     }
 }
