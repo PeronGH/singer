@@ -40,19 +40,18 @@ type clashLogMessage struct {
 	Payload string `json:"payload"`
 }
 
-func startSingBoxProcess(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
+func startSingBoxProcess(ctx context.Context, req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
 	svc, err := androidvpn.NewService()
 	if err != nil {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	if err := svc.Start(ctx, string(req.configJSON), req.tunMode); err != nil {
-		cancel()
 		return nil, err
 	}
 
-	go streamClashLogs(ctx, req.api, onLine, onDone)
+	logCtx, cancel := context.WithCancel(context.Background())
+	go streamClashLogs(logCtx, req.api, onLine, onDone)
 	return &androidProcess{svc: svc, cancel: cancel}, nil
 }
 

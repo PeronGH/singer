@@ -4,6 +4,7 @@ package gui
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -43,7 +44,10 @@ func (p execProcess) Stop() error {
 	return nil
 }
 
-func startSingBoxProcess(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
+func startSingBoxProcess(ctx context.Context, req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	cmd := exec.Command(singBoxBinary, "run", "--disable-color", "-c", "stdin")
 
 	stdin, err := cmd.StdinPipe()

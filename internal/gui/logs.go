@@ -24,8 +24,26 @@ func (a *App) logsView(c *ui.Context) {
 		if ui.Button(c, "Clear").Disabled(len(lines) == 0).Clicked() {
 			a.runner.clear()
 		}
-		if ui.Button(c, "Stop").Label("Stop sing-box").Disabled(!a.runner.active).Clicked() {
+		if ui.Button(c, "Stop").Label("Stop sing-box").Disabled(!a.runner.busy()).Clicked() {
 			a.stopRunner()
+		}
+	}
+
+	renderStatusBadge := func() {
+		switch {
+		case a.runner.starting:
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				ui.Spinner(c).Label("Starting sing-box")
+				ui.Badge(c, fmt.Sprintf("Starting · %s", a.runner.activeTag)).
+					Background(t.Warning).
+					TextColor(t.AccentText)
+			})
+		case a.runner.active:
+			ui.Badge(c, fmt.Sprintf("Running · %s", a.runner.activeTag)).
+				Background(t.Success).
+				TextColor(t.AccentText)
+		default:
+			ui.Badge(c, "Stopped")
 		}
 	}
 
@@ -40,26 +58,14 @@ func (a *App) logsView(c *ui.Context) {
 			ui.Column(c).Gap(8).Children(func() {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, "Logs").FontSize(18).Bold()
-					if a.runner.active {
-						ui.Badge(c, fmt.Sprintf("Running · %s", a.runner.activeTag)).
-							Background(t.Success).
-							TextColor(t.AccentText)
-					} else {
-						ui.Badge(c, "Stopped")
-					}
+					renderStatusBadge()
 				})
 				ui.Row(c).Gap(6).Wrap().AlignItems(ui.Center).Children(renderActions)
 			})
 		} else {
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Logs").FontSize(18).Bold()
-				if a.runner.active {
-					ui.Badge(c, fmt.Sprintf("Running · %s", a.runner.activeTag)).
-						Background(t.Success).
-						TextColor(t.AccentText)
-				} else {
-					ui.Badge(c, "Stopped")
-				}
+				renderStatusBadge()
 				ui.Spacer(c)
 				renderActions()
 			})

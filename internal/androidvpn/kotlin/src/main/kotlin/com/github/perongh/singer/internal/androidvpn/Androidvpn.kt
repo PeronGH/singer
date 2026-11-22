@@ -31,7 +31,7 @@ private class AndroidVpnController : Service {
         }
 
         suspendCancellableCoroutine { cont ->
-            val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+            val receiver = object : ResultReceiver(null) {
                 override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                     if (!cont.isActive) return
                     if (resultCode == SingerVpnService.RESULT_OK) {
@@ -42,6 +42,8 @@ private class AndroidVpnController : Service {
                     }
                 }
             }
+
+            cont.invokeOnCancellation { stop() }
 
             val intent = Intent(context, SingerVpnService::class.java).apply {
                 action = SingerVpnService.ACTION_START
@@ -82,7 +84,9 @@ private class AndroidVpnController : Service {
                         cont.resumeWithException(IllegalStateException("VPN permission denied"))
                     }
                 }
-                cont.invokeOnCancellation { launcher.unregister() }
+                cont.invokeOnCancellation {
+                    Handler(Looper.getMainLooper()).post { launcher?.unregister() }
+                }
                 launcher.launch(prepareIntent)
             }
         }

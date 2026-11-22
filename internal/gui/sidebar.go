@@ -36,7 +36,7 @@ func (a *App) sidebarView(c *ui.Context) {
 								refreshTarget = g.Name
 							}
 							m.Separator()
-							if m.Item("Delete…").Chosen() {
+							if m.Item("Delete…").Disabled(a.fetching[g.Name]).Chosen() {
 								deleteTarget = g.Name
 							}
 						})
@@ -46,7 +46,10 @@ func (a *App) sidebarView(c *ui.Context) {
 
 			ui.SidebarSection(c, "Runtime", nil, func() {
 				ui.SidebarItem(c.Key(navLogs), navLogs, nil, "Logs").Children(func() {
-					if a.runner.active {
+					switch {
+					case a.runner.starting:
+						ui.Spinner(c).Label("Starting sing-box")
+					case a.runner.active:
 						ui.Badge(c, "Running").Background(t.Success).TextColor(t.AccentText)
 					}
 				})
@@ -73,10 +76,23 @@ func (a *App) statusFooterView(c *ui.Context) {
 	ui.Column(c).Padding(12, 14).Gap(8).Shrink(0).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			label := ui.Text(c, "TUN Mode").FontSize(12).Grow(1)
-			if ui.Switch(c, &a.tunMode).LabelledBy(label).Changed() && a.runner.active {
+			if ui.Switch(c, &a.tunMode).LabelledBy(label).Changed() && a.runner.busy() {
 				a.connectNode(a.runner.activeGroup, a.runner.activeIndex)
 			}
 		})
+
+		if a.runner.starting {
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				ui.Spinner(c).Label("Starting sing-box")
+				ui.Text(c, "Starting…").FontSize(12).Bold().TextColor(t.Warning)
+			})
+			ui.Text(c, a.runner.activeTag).FontSize(13).Bold().SingleLine()
+			ui.Text(c, a.runner.activeGroup).FontSize(12).TextColor(t.TextMuted).SingleLine()
+			if ui.Button(c, "Stop").Label("Stop sing-box").FillWidth().Justify(ui.Center).Clicked() {
+				a.stopRunner()
+			}
+			return
+		}
 
 		if a.runner.active {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {

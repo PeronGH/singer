@@ -41,11 +41,12 @@ type processHandle interface {
 	Stop() error
 }
 
-type processStarter func(req runRequest, onLine func(string), onDone func(error)) (processHandle, error)
+type processStarter func(ctx context.Context, req runRequest, onLine func(string), onDone func(error)) (processHandle, error)
 
 type runner struct {
 	mu              sync.Mutex
 	proc            processHandle
+	startCancel     context.CancelFunc
 	closed          bool
 	startProcess    processStarter
 	lookPath        func(string) (string, error)
@@ -53,7 +54,9 @@ type runner struct {
 	metricsInterval time.Duration
 	metricsCancel   context.CancelFunc
 	metricsRunID    uint64
+	runSeq          uint64
 
+	starting    bool
 	active      bool
 	stopping    bool
 	activeGroup string
@@ -84,8 +87,12 @@ func (r *runner) checkBinary() error {
 	return err
 }
 
+func (r *runner) busy() bool {
+	return r.starting || r.active
+}
+
 func (r *runner) connect(req runRequest, dispatch func(func()), onErr func(error)) {
-	if r.active {
+	if r.busy() {
 		reqCopy := req
 		r.pending = &reqCopy
 		if !r.stopping {
@@ -97,6 +104,29 @@ func (r *runner) connect(req runRequest, dispatch func(func()), onErr func(error
 }
 
 func (r *runner) launch(req runRequest, dispatch func(func()), onErr func(error)) {
+	r.runSeq++
+	runID := r.runSeq
+
+	startCtx, startCancel := context.WithCancel(context.Background())
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		startCancel()
+		return
+	}
+	r.startCancel = startCancel
+	r.mu.Unlock()
+
+	r.starting = true
+	r.active = false
+	r.stopping = false
+	r.activeGroup = req.groupName
+	r.activeTag = req.nodeTag
+	r.activeIndex = req.nodeIndex
+	r.metrics = trafficMetrics{}
+	r.append(logKindStart, fmt.Sprintf("starting sing-box (%s / %s)…", req.groupName, req.nodeTag))
+
+	starter := r.startProcess
 	onLine := func(line string) {
 		dispatch(func() {
 			r.append(logKindOutput, line)
@@ -104,36 +134,81 @@ func (r *runner) launch(req runRequest, dispatch func(func()), onErr func(error)
 	}
 	onDone := func(err error) {
 		dispatch(func() {
-			r.finish(err, dispatch, onErr)
+			if r.runSeq == runID {
+				r.finish(err, dispatch, onErr)
+			}
 		})
 	}
 
-	proc, err := r.startProcess(req, onLine, onDone)
+	go func() {
+		proc, err := starter(startCtx, req, onLine, onDone)
+		dispatch(func() {
+			r.onStarted(runID, req, proc, err, dispatch, onErr)
+		})
+	}()
+}
+
+func (r *runner) onStarted(runID uint64, req runRequest, proc processHandle, err error, dispatch func(func()), onErr func(error)) {
+	r.mu.Lock()
+	if r.runSeq == runID && r.startCancel != nil {
+		r.startCancel()
+		r.startCancel = nil
+	}
+	closed := r.closed
+	r.mu.Unlock()
+
+	if closed || r.runSeq != runID {
+		if proc != nil {
+			_ = proc.Stop()
+		}
+		return
+	}
+
 	if err != nil {
-		r.append(logKindStop, fmt.Sprintf("sing-box failed to start: %v", err))
-		onErr(err)
+		wasStopping := r.stopping
+		r.resetState()
+		if wasStopping {
+			r.append(logKindStop, "sing-box stopped")
+			onErr(nil)
+		} else {
+			r.append(logKindStop, fmt.Sprintf("sing-box failed to start: %v", err))
+			onErr(err)
+		}
+		if r.pending != nil {
+			next := *r.pending
+			r.pending = nil
+			onErr(nil)
+			r.launch(next, dispatch, onErr)
+		}
 		return
 	}
 
 	r.mu.Lock()
-	closed := r.closed
-	if !closed {
-		r.proc = proc
-	}
+	r.proc = proc
 	r.mu.Unlock()
-	if closed {
+
+	if r.stopping {
+		r.starting = false
+		r.active = true
 		_ = proc.Stop()
 		return
 	}
 
+	r.starting = false
 	r.active = true
 	r.stopping = false
-	r.activeGroup = req.groupName
-	r.activeTag = req.nodeTag
-	r.activeIndex = req.nodeIndex
-	r.metrics = trafficMetrics{}
 	r.append(logKindStart, fmt.Sprintf("sing-box started (%s / %s)", req.groupName, req.nodeTag))
 	r.startMetrics(req.api, dispatch)
+}
+
+func (r *runner) resetState() {
+	r.starting = false
+	r.active = false
+	r.stopping = false
+	r.activeGroup = ""
+	r.activeTag = ""
+	r.activeIndex = -1
+	r.metrics = trafficMetrics{}
 }
 
 func (r *runner) startMetrics(api clashAPIInfo, dispatch func(func())) {
@@ -173,13 +248,19 @@ func (r *runner) stopMetrics() {
 func (r *runner) stop() {
 	r.mu.Lock()
 	proc := r.proc
+	startCancel := r.startCancel
 	r.mu.Unlock()
-	if proc == nil {
+	if proc == nil && startCancel == nil {
 		return
 	}
 
 	r.stopping = true
-	_ = proc.Stop()
+	if startCancel != nil {
+		startCancel()
+	}
+	if proc != nil {
+		_ = proc.Stop()
+	}
 }
 
 func (r *runner) finish(err error, dispatch func(func()), onErr func(error)) {
@@ -187,16 +268,16 @@ func (r *runner) finish(err error, dispatch func(func()), onErr func(error)) {
 
 	r.mu.Lock()
 	r.proc = nil
+	if r.startCancel != nil {
+		r.startCancel()
+		r.startCancel = nil
+	}
 	closed := r.closed
 	r.mu.Unlock()
 
+	r.runSeq++
 	wasStopping := r.stopping
-	r.active = false
-	r.stopping = false
-	r.activeGroup = ""
-	r.activeTag = ""
-	r.activeIndex = -1
-	r.metrics = trafficMetrics{}
+	r.resetState()
 
 	if closed {
 		r.pending = nil
@@ -230,11 +311,16 @@ func (r *runner) shutdown() {
 	r.closed = true
 	proc := r.proc
 	r.proc = nil
+	startCancel := r.startCancel
+	r.startCancel = nil
 	r.mu.Unlock()
 
 	r.pending = nil
+	r.resetState()
 	r.stopping = true
-	r.metrics = trafficMetrics{}
+	if startCancel != nil {
+		startCancel()
+	}
 	if proc != nil {
 		_ = proc.Stop()
 	}
@@ -265,6 +351,10 @@ func (r *runner) allText() string {
 		b.WriteString(line.text)
 	}
 	return b.String()
+}
+
+func (r *runner) isNodeStarting(groupName string, nodeIndex int) bool {
+	return r.starting && r.activeGroup == groupName && r.activeIndex == nodeIndex
 }
 
 func (r *runner) isNodeActive(groupName string, nodeIndex int) bool {

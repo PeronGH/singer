@@ -230,7 +230,7 @@ func (a *App) handleGlobalShortcuts(c *ui.Context) {
 		}
 		return
 	}
-	if a.selectedNav == navLogs && !c.FocusTakesText() && c.Shortcut(0, ui.KeyEscape) && a.runner.active {
+	if a.selectedNav == navLogs && !c.FocusTakesText() && c.Shortcut(0, ui.KeyEscape) && a.runner.busy() {
 		a.stopRunner()
 	}
 }
@@ -386,16 +386,31 @@ func (a *App) startFetchRemote(name, remoteURL string) {
 	a.errMsg = ""
 	a.fetching[name] = true
 
+	isNew := a.findGroup(name) == nil
+	if isNew {
+		a.upsertGroup(store.Group{
+			Name: name,
+			Kind: store.GroupKindRemote,
+			URL:  remoteURL,
+		})
+	}
+
 	client := a.client
 	go func() {
 		group, err := fetchRemote(client, name, remoteURL)
 		a.dispatchUI(func() {
 			delete(a.fetching, name)
 			if err != nil {
+				if isNew {
+					a.removeGroup(name)
+				}
 				a.errMsg = err.Error()
 				return
 			}
 			if err := a.store.UpsertRemote(group.Name, group.URL, group.Nodes); err != nil {
+				if isNew {
+					a.removeGroup(name)
+				}
 				a.errMsg = err.Error()
 				return
 			}
@@ -404,6 +419,22 @@ func (a *App) startFetchRemote(name, remoteURL string) {
 			a.queueToast("Updated " + group.Name)
 		})
 	}()
+}
+
+func (a *App) removeGroup(name string) {
+	for i := range a.groups {
+		if a.groups[i].Name == name {
+			a.groups = slices.Delete(a.groups, i, i+1)
+			break
+		}
+	}
+	if a.selectedNav == navGroupPrefix+name {
+		if len(a.groups) > 0 {
+			a.selectedNav = navGroupPrefix + a.groups[0].Name
+		} else {
+			a.selectedNav = navLogs
+		}
+	}
 }
 
 func (a *App) refreshAllRemotes() {
@@ -448,19 +479,7 @@ func (a *App) deleteRemote(name string) {
 		return
 	}
 	a.errMsg = ""
-	for i := range a.groups {
-		if a.groups[i].Name == name {
-			a.groups = slices.Delete(a.groups, i, i+1)
-			break
-		}
-	}
-	if a.selectedNav == navGroupPrefix+name {
-		if len(a.groups) > 0 {
-			a.selectedNav = navGroupPrefix + a.groups[0].Name
-		} else {
-			a.selectedNav = navLogs
-		}
-	}
+	a.removeGroup(name)
 	a.queueToast("Deleted remote " + name)
 }
 

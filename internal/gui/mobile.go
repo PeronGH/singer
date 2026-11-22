@@ -39,6 +39,9 @@ func (a *App) compactView(c *ui.Context) {
 						id := navGroupPrefix + g.Name
 						selected := a.selectedNav == id
 						label := fmt.Sprintf("%s (%d)", g.Name, len(g.Nodes))
+						if a.fetching[g.Name] {
+							label = fmt.Sprintf("%s · Fetching…", g.Name)
+						}
 						if selected {
 							ui.PrimaryButton(c.Key("nav-"+id), label).
 								Label(g.Name).
@@ -53,7 +56,10 @@ func (a *App) compactView(c *ui.Context) {
 					}
 
 					logsLabel := "Logs"
-					if a.runner.active {
+					switch {
+					case a.runner.starting:
+						logsLabel = "Logs · Starting…"
+					case a.runner.active:
 						logsLabel = "Logs · Running"
 					}
 					if a.selectedNav == navLogs {
@@ -86,7 +92,17 @@ func (a *App) compactFooterView(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Background(t.Surface).Padding(10, 14).Gap(8).Shrink(0).Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			if a.runner.active {
+			switch {
+			case a.runner.starting:
+				ui.Spinner(c).Label("Starting sing-box")
+				ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
+					ui.Text(c, a.runner.activeTag).FontSize(13).Bold().SingleLine()
+					ui.Text(c, "Starting…").FontSize(11).TextColor(t.Warning).SingleLine()
+				})
+				if ui.Button(c, "Stop").Label("Stop sing-box").Clicked() {
+					a.stopRunner()
+				}
+			case a.runner.active:
 				ui.Box(c).Size(8, 8).Radius(4).Background(t.Success).Shrink(0)
 				ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
 					ui.Text(c, a.runner.activeTag).FontSize(13).Bold().SingleLine()
@@ -100,13 +116,13 @@ func (a *App) compactFooterView(c *ui.Context) {
 				if ui.Button(c, "Stop").Label("Stop sing-box").Clicked() {
 					a.stopRunner()
 				}
-			} else {
+			default:
 				ui.Box(c).Size(8, 8).Radius(4).Background(t.TextMuted.Alpha(0.5)).Shrink(0)
 				ui.Text(c, "Disconnected").FontSize(12).TextColor(t.TextMuted).Grow(1)
 			}
 
 			label := ui.Text(c, "TUN").FontSize(12)
-			if ui.Switch(c, &a.tunMode).LabelledBy(label).Changed() && a.runner.active {
+			if ui.Switch(c, &a.tunMode).LabelledBy(label).Changed() && a.runner.busy() {
 				a.connectNode(a.runner.activeGroup, a.runner.activeIndex)
 			}
 		})
