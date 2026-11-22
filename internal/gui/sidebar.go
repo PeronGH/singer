@@ -97,14 +97,9 @@ func (a *App) statusFooterView(c *ui.Context) {
 					})
 				})
 			}
-			ui.Row(c).Gap(6).Children(func() {
-				if ui.Button(c, "Stop").Label("Stop sing-box").Grow(1).Clicked() {
-					a.stopRunner()
-				}
-				if ui.Button(c, "Logs").Label("Open logs").Clicked() {
-					a.selectedNav = navLogs
-				}
-			})
+			if ui.Button(c, "Stop").Label("Stop sing-box").FillWidth().Justify(ui.Center).Clicked() {
+				a.stopRunner()
+			}
 			return
 		}
 
