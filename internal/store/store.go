@@ -55,8 +55,12 @@ func New() (*Store, error) {
 		}
 		dir = filepath.Join(home, ".local", "share")
 	}
-	dir = filepath.Join(dir, "singer")
+	return NewAt(filepath.Join(dir, "singer"))
+}
 
+// NewAt creates a Store rooted at dir, normalizing the on-disk layout and
+// ensuring the built-in local group exists.
+func NewAt(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}

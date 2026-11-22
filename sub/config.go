@@ -3,6 +3,7 @@ package sub
 import (
 	"fmt"
 	"net/netip"
+	"runtime"
 
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
@@ -61,7 +62,7 @@ func ConfigWithMode(outbounds []option.Outbound, outboundTag string, mode Mode) 
 					ListenOptions: option.ListenOptions{
 						ListenPort: 2088,
 					},
-					SetSystemProxy: true,
+					SetSystemProxy: runtime.GOOS != "android",
 				},
 			}},
 			Outbounds: outbounds,

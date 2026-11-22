@@ -105,6 +105,20 @@ func (a *App) metricsBarView(c *ui.Context) {
 		memVal = formatBytes(int64(m.memory))
 	}
 
+	if w, _ := c.Size(); w > 0 && w < compactWidthBreakpoint {
+		ui.Column(c).Gap(8).Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
+				card("Download", downVal, downSub)
+				card("Upload", upVal, upSub)
+			})
+			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
+				card("Connections", connVal, "Active")
+				card("Memory", memVal, "sing-box")
+			})
+		})
+		return
+	}
+
 	ui.Row(c).Gap(10).AlignItems(ui.Stretch).Children(func() {
 		card("Download", downVal, downSub)
 		card("Upload", upVal, upSub)

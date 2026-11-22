@@ -1,3 +1,5 @@
-# build output
-/sub2sing
 /singer
+/sub2sing
+/.mygo/
+/build/
+/internal/androidvpn/kotlin/libs/libbox.aar

@@ -95,8 +95,8 @@ func drainEvents(t *testing.T, events chan func(), tt *ui.Tester, wait bool) {
 
 func TestConnectUsesGlobalIndexWhenFiltered(t *testing.T) {
 	var startedConfigs [][]byte
-	starter := func(configJSON []byte, onLine func(string), onDone func(error)) (processHandle, error) {
-		startedConfigs = append(startedConfigs, append([]byte(nil), configJSON...))
+	starter := func(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
+		startedConfigs = append(startedConfigs, append([]byte(nil), req.configJSON...))
 		return newFakeProcess(onLine, onDone), nil
 	}
 
@@ -254,7 +254,7 @@ func TestRemoteAddRefreshAndDelete(t *testing.T) {
 
 func TestQueuedRestartAndIntentionalStop(t *testing.T) {
 	var procs []*fakeProcess
-	starter := func(configJSON []byte, onLine func(string), onDone func(error)) (processHandle, error) {
+	starter := func(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
 		p := newFakeProcess(onLine, onDone)
 		procs = append(procs, p)
 		return p, nil
@@ -369,8 +369,8 @@ func TestMissingSingBoxShowsBlockingScreen(t *testing.T) {
 
 func TestTunModeToggleGeneratesTunConfig(t *testing.T) {
 	var startedConfigs [][]byte
-	starter := func(configJSON []byte, onLine func(string), onDone func(error)) (processHandle, error) {
-		startedConfigs = append(startedConfigs, append([]byte(nil), configJSON...))
+	starter := func(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
+		startedConfigs = append(startedConfigs, append([]byte(nil), req.configJSON...))
 		return newFakeProcess(onLine, onDone), nil
 	}
 
@@ -450,8 +450,8 @@ func TestClashAPIMetricsPollingAndUI(t *testing.T) {
 		startedConfig []byte
 		proc          *fakeProcess
 	)
-	starter := func(configJSON []byte, onLine func(string), onDone func(error)) (processHandle, error) {
-		startedConfig = append([]byte(nil), configJSON...)
+	starter := func(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
+		startedConfig = append([]byte(nil), req.configJSON...)
 		proc = newFakeProcess(onLine, onDone)
 		return proc, nil
 	}
@@ -514,5 +514,36 @@ func TestClashAPIMetricsPollingAndUI(t *testing.T) {
 	drainEvents(t, events, tt, true)
 	if app.runner.metrics.ready {
 		t.Fatal("expected metrics to reset when sing-box exits")
+	}
+}
+
+func TestCompactMobileLayout(t *testing.T) {
+	var startedTun bool
+	starter := func(req runRequest, onLine func(string), onDone func(error)) (processHandle, error) {
+		startedTun = req.tunMode
+		return newFakeProcess(onLine, onDone), nil
+	}
+
+	app, _, _ := newTestApp(t, []string{
+		"socks://10.0.0.1:1080#alpha",
+	}, withProcessStarter(starter))
+	tt := ui.NewTester(app.View, 390, 844)
+
+	if !tt.HasText("alpha") || !tt.HasText("Disconnected") {
+		t.Fatalf("expected compact mobile view with alpha, texts=%q", tt.Texts())
+	}
+	if err := tt.Click("TUN"); err != nil {
+		t.Fatalf("click TUN: %v", err)
+	}
+	if err := tt.Click("Connect alpha"); err != nil {
+		t.Fatalf("click Connect alpha: %v", err)
+	}
+	if !startedTun || app.selectedNav != navLogs {
+		t.Fatalf("expected TUN connect on mobile layout, startedTun=%v nav=%q", startedTun, app.selectedNav)
+	}
+	for _, a := range tt.AccessAll() {
+		if a.Role == ui.RoleButton && a.Name == "" {
+			t.Errorf("mobile layout: button at %v has empty accessible name", a.Bounds)
+		}
 	}
 }

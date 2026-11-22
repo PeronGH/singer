@@ -1,13 +1,9 @@
 package gui
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"net/http"
-	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +32,7 @@ type runRequest struct {
 	groupName  string
 	nodeTag    string
 	nodeIndex  int
+	tunMode    bool
 	configJSON []byte
 	api        clashAPIInfo
 }
@@ -44,72 +41,7 @@ type processHandle interface {
 	Stop() error
 }
 
-type processStarter func(configJSON []byte, onLine func(string), onDone func(error)) (processHandle, error)
-
-type execProcess struct {
-	cmd  *exec.Cmd
-	done <-chan struct{}
-}
-
-func (p execProcess) Stop() error {
-	if p.cmd == nil || p.cmd.Process == nil {
-		return nil
-	}
-	if runtime.GOOS == "windows" {
-		return p.cmd.Process.Kill()
-	}
-	if err := p.cmd.Process.Signal(os.Interrupt); err != nil {
-		return p.cmd.Process.Kill()
-	}
-	if p.done == nil {
-		return nil
-	}
-	go func() {
-		select {
-		case <-p.done:
-		case <-time.After(2 * time.Second):
-			_ = p.cmd.Process.Kill()
-		}
-	}()
-	return nil
-}
-
-func startSingBoxProcess(configJSON []byte, onLine func(string), onDone func(error)) (processHandle, error) {
-	cmd := exec.Command(singBoxBinary, "run", "--disable-color", "-c", "stdin")
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = stdin.Write(configJSON)
-		_ = stdin.Close()
-
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			onLine(scanner.Text())
-		}
-		if err := scanner.Err(); err != nil {
-			onLine(fmt.Sprintf("log stream error: %v", err))
-		}
-		onDone(cmd.Wait())
-	}()
-
-	return execProcess{cmd: cmd, done: done}, nil
-}
+type processStarter func(req runRequest, onLine func(string), onDone func(error)) (processHandle, error)
 
 type runner struct {
 	mu              sync.Mutex
@@ -140,7 +72,7 @@ func newRunner(starter processStarter) *runner {
 	}
 	return &runner{
 		startProcess:    starter,
-		lookPath:        exec.LookPath,
+		lookPath:        defaultLookPath,
 		metricsClient:   newLocalHTTPClient(),
 		metricsInterval: defaultMetricsInterval,
 		activeIndex:     -1,
@@ -176,7 +108,7 @@ func (r *runner) launch(req runRequest, dispatch func(func()), onErr func(error)
 		})
 	}
 
-	proc, err := r.startProcess(req.configJSON, onLine, onDone)
+	proc, err := r.startProcess(req, onLine, onDone)
 	if err != nil {
 		r.append(logKindStop, fmt.Sprintf("sing-box failed to start: %v", err))
 		onErr(err)

@@ -2,6 +2,7 @@ package gui
 
 import (
 	"net/http"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -141,6 +142,7 @@ func New(s *store.Store, opts ...Option) (*App, error) {
 		editingNodeIndex: -1,
 		runner:           newRunner(nil),
 		logList:          ui.ListState{FollowEnd: true},
+		tunMode:          runtime.GOOS == "android",
 		fetching:         make(map[string]bool),
 	}
 	for _, opt := range opts {
@@ -180,23 +182,31 @@ func (a *App) View(c *ui.Context) {
 		a.nodeList = ui.ListState{}
 	}
 
-	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
-		a.sidebarView(c)
-		ui.Divider(c)
-		ui.Column(c).Grow(1).MinWidth(0).FillHeight().Children(func() {
-			if a.selectedNav == navLogs {
-				a.logsView(c)
-				return
-			}
-			if g := a.activeGroup(); g != nil {
-				a.groupView(c, g)
-				return
-			}
-			a.logsView(c)
+	if w, _ := c.Size(); w > 0 && w < compactWidthBreakpoint {
+		a.compactView(c)
+	} else {
+		ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
+			a.sidebarView(c)
+			ui.Divider(c)
+			ui.Column(c).Grow(1).MinWidth(0).FillHeight().Children(func() {
+				a.mainPaneView(c)
+			})
 		})
-	})
+	}
 
 	a.dialogsView(c)
+}
+
+func (a *App) mainPaneView(c *ui.Context) {
+	if a.selectedNav == navLogs {
+		a.logsView(c)
+		return
+	}
+	if g := a.activeGroup(); g != nil {
+		a.groupView(c, g)
+		return
+	}
+	a.logsView(c)
 }
 
 func (a *App) handleGlobalShortcuts(c *ui.Context) {
@@ -352,6 +362,7 @@ func (a *App) connectNode(groupName string, nodeIndex int) {
 		groupName:  groupName,
 		nodeTag:    extractTag(g.Nodes[nodeIndex]),
 		nodeIndex:  nodeIndex,
+		tunMode:    a.tunMode,
 		configJSON: configJSON,
 		api:        api,
 	}

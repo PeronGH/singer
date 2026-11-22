@@ -30,3 +30,68 @@ jobs:
 
       - name: Run tests
         run: go test ./...
+
+  android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Resolve sing-box version
+        id: versions
+        run: |
+          ver="$(go list -m -f '{{.Version}}' github.com/sagernet/sing-box)"
+          echo "sing_box=${ver}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache libbox.aar
+        id: libbox-cache
+        uses: actions/cache@v4
+        with:
+          path: internal/androidvpn/kotlin/libs/libbox.aar
+          key: libbox-arm64-${{ steps.versions.outputs.sing_box }}
+
+      - name: Build libbox.aar
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          ver="${{ steps.versions.outputs.sing_box }}"
+          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.12
+          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.12
+          export PATH="$(go env GOPATH)/bin:${PATH}"
+          if [[ -z "${ANDROID_NDK_HOME:-}" ]]; then
+            ANDROID_NDK_HOME="$(ls -d "${ANDROID_HOME}"/ndk/* | sort -V | tail -n 1)"
+            export ANDROID_NDK_HOME
+          fi
+          mkdir -p internal/androidvpn/kotlin/libs
+          git clone --depth 1 --branch "${ver}" https://github.com/SagerNet/sing-box.git "${RUNNER_TEMP}/sing-box"
+          (
+            cd "${RUNNER_TEMP}/sing-box"
+            gomobile bind -v \
+              -o "${GITHUB_WORKSPACE}/internal/androidvpn/kotlin/libs/libbox.aar" \
+              -target android/arm64 \
+              -androidapi 26 \
+              -javapkg=io.nekohasekai \
+              -libname=box \
+              -trimpath -buildvcs=false \
+              -ldflags "-X github.com/sagernet/sing-box/constant.Version=${ver#v} -X runtime.godebugDefault=multipathtcp=0,tlssha1=1 -checklinkname=0 -s -w -buildid=" \
+              -tags "with_gvisor,with_quic,with_utls,with_clash_api,badlinkname,tfogo_checklinkname0" \
+              ./experimental/libbox
+          )
+
+      - name: Build Android APK
+        run: |
+          set -euo pipefail
+          mygo_ver="$(go list -m -f '{{.Version}}' github.com/egoist/mygo)"
+          go run "github.com/egoist/mygo/cmd/mygo@${mygo_ver}" build -platform android/arm64
