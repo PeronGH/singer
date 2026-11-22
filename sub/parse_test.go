@@ -384,6 +384,45 @@ func TestConfigUnknownTag(t *testing.T) {
 	}
 }
 
+func TestConfigTun(t *testing.T) {
+	outbounds, err := Parse(strings.NewReader("socks://10.0.0.1:1080#direct\nhttp://10.0.0.2:8080#my-http\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := ConfigWithMode(outbounds, "my-http", ModeTun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Inbounds) != 1 || cfg.Inbounds[0].Type != C.TypeTun {
+		t.Fatalf("inbounds = %#v, want single tun inbound", cfg.Inbounds)
+	}
+	tunOpts := cfg.Inbounds[0].Options.(*option.TunInboundOptions)
+	if len(tunOpts.Address) != 2 || tunOpts.Address[0].String() != TunIPv4CIDR || tunOpts.Address[1].String() != TunIPv6CIDR {
+		t.Fatalf("tun address = %v, want [%s %s]", tunOpts.Address, TunIPv4CIDR, TunIPv6CIDR)
+	}
+	if !tunOpts.AutoRoute || !tunOpts.StrictRoute || tunOpts.Stack != "mixed" {
+		t.Fatalf("tun options = %+v", tunOpts)
+	}
+	if cfg.DNS == nil || len(cfg.DNS.Servers) != 2 || cfg.DNS.Final != "remote" {
+		t.Fatalf("dns = %+v", cfg.DNS)
+	}
+	for _, s := range cfg.DNS.Servers {
+		if s.Type == C.DNSTypeFakeIP {
+			t.Fatal("fakeip must not be configured")
+		}
+	}
+	if cfg.Route == nil || !cfg.Route.AutoDetectInterface || cfg.Route.Final != "my-http" {
+		t.Fatalf("route = %+v", cfg.Route)
+	}
+	if cfg.Route.DefaultDomainResolver == nil || cfg.Route.DefaultDomainResolver.Server != "local" {
+		t.Fatalf("default_domain_resolver = %+v", cfg.Route.DefaultDomainResolver)
+	}
+	// Existing "direct" outbound tag must not collide with injected direct outbound.
+	if len(cfg.Outbounds) != 3 || cfg.Outbounds[2].Type != C.TypeDirect || cfg.Outbounds[2].Tag == "direct" {
+		t.Fatalf("injected direct outbound = %+v", cfg.Outbounds)
+	}
+}
+
 func TestParseUnsupportedScheme(t *testing.T) {
 	_, err := ParseLine("vmess://something")
 	if err == nil {

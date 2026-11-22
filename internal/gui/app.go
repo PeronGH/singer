@@ -79,6 +79,7 @@ type App struct {
 
 	runner  *runner
 	logList ui.ListState
+	tunMode bool
 
 	fetching map[string]bool
 
@@ -296,7 +297,11 @@ func (a *App) connectNode(groupName string, nodeIndex int) {
 		return
 	}
 
-	cfg, err := sub.Config(outbounds, outbounds[nodeIndex].Tag)
+	mode := sub.ModeProxy
+	if a.tunMode {
+		mode = sub.ModeTun
+	}
+	cfg, err := sub.ConfigWithMode(outbounds, outbounds[nodeIndex].Tag, mode)
 	if err != nil {
 		a.errMsg = err.Error()
 		return

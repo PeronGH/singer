@@ -11,6 +11,7 @@ import (
 
 func main() {
 	outboundTag := flag.String("outbound", "", "outbound tag to route traffic through (enables full config output)")
+	tunMode := flag.Bool("tun", false, "use TUN inbound instead of mixed system proxy (requires -outbound)")
 	flag.Parse()
 
 	outbounds, err := sub.Parse(os.Stdin)
@@ -21,7 +22,11 @@ func main() {
 
 	var result any = outbounds
 	if *outboundTag != "" {
-		result, err = sub.Config(outbounds, *outboundTag)
+		mode := sub.ModeProxy
+		if *tunMode {
+			mode = sub.ModeTun
+		}
+		result, err = sub.ConfigWithMode(outbounds, *outboundTag, mode)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

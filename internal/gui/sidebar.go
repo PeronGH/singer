@@ -71,6 +71,13 @@ func (a *App) sidebarView(c *ui.Context) {
 func (a *App) statusFooterView(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Padding(12, 14).Gap(8).Shrink(0).Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Children(func() {
+			label := ui.Text(c, "TUN Mode").FontSize(12).Grow(1)
+			if ui.Switch(c, &a.tunMode).LabelledBy(label).Changed() && a.runner.active {
+				a.connectNode(a.runner.activeGroup, a.runner.activeIndex)
+			}
+		})
+
 		if a.runner.active {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Size(8, 8).Radius(4).Background(t.Success).Shrink(0)

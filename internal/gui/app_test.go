@@ -365,3 +365,52 @@ func TestMissingSingBoxShowsBlockingScreen(t *testing.T) {
 		t.Fatalf("expected main UI after Check Again, texts=%q", tt.Texts())
 	}
 }
+
+func TestTunModeToggleGeneratesTunConfig(t *testing.T) {
+	var startedConfigs [][]byte
+	starter := func(configJSON []byte, onLine func(string), onDone func(error)) (processHandle, error) {
+		startedConfigs = append(startedConfigs, append([]byte(nil), configJSON...))
+		return newFakeProcess(onLine, onDone), nil
+	}
+
+	app, _, _ := newTestApp(t, []string{
+		"socks://10.0.0.1:1080#alpha",
+	}, withProcessStarter(starter))
+	tt := ui.NewTester(app.View, 960, 640)
+
+	if err := tt.Click("TUN Mode"); err != nil {
+		t.Fatalf("click TUN Mode: %v", err)
+	}
+	if !app.tunMode {
+		t.Fatal("expected tunMode to be enabled after toggle")
+	}
+	if err := tt.Click("Connect alpha"); err != nil {
+		t.Fatalf("click Connect alpha: %v", err)
+	}
+	if len(startedConfigs) != 1 {
+		t.Fatalf("started processes = %d, want 1", len(startedConfigs))
+	}
+
+	var cfg struct {
+		Inbounds []struct {
+			Type    string   `json:"type"`
+			Address []string `json:"address"`
+		} `json:"inbounds"`
+		DNS struct {
+			Servers []struct {
+				Type string `json:"type"`
+			} `json:"servers"`
+		} `json:"dns"`
+	}
+	if err := json.Unmarshal(startedConfigs[0], &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if len(cfg.Inbounds) != 1 || cfg.Inbounds[0].Type != "tun" {
+		t.Fatalf("inbounds = %+v, want tun", cfg.Inbounds)
+	}
+	for _, s := range cfg.DNS.Servers {
+		if s.Type == "fakeip" {
+			t.Fatal("fakeip must not be present in TUN config")
+		}
+	}
+}

@@ -3,9 +3,12 @@ package gui
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -41,14 +44,31 @@ type processHandle interface {
 type processStarter func(configJSON []byte, onLine func(string), onDone func(error)) (processHandle, error)
 
 type execProcess struct {
-	cmd *exec.Cmd
+	cmd  *exec.Cmd
+	done <-chan struct{}
 }
 
 func (p execProcess) Stop() error {
 	if p.cmd == nil || p.cmd.Process == nil {
 		return nil
 	}
-	return p.cmd.Process.Kill()
+	if runtime.GOOS == "windows" {
+		return p.cmd.Process.Kill()
+	}
+	if err := p.cmd.Process.Signal(os.Interrupt); err != nil {
+		return p.cmd.Process.Kill()
+	}
+	if p.done == nil {
+		return nil
+	}
+	go func() {
+		select {
+		case <-p.done:
+		case <-time.After(2 * time.Second):
+			_ = p.cmd.Process.Kill()
+		}
+	}()
+	return nil
 }
 
 func startSingBoxProcess(configJSON []byte, onLine func(string), onDone func(error)) (processHandle, error) {
@@ -68,7 +88,9 @@ func startSingBoxProcess(configJSON []byte, onLine func(string), onDone func(err
 		return nil, err
 	}
 
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		_, _ = stdin.Write(configJSON)
 		_ = stdin.Close()
 
@@ -83,7 +105,7 @@ func startSingBoxProcess(configJSON []byte, onLine func(string), onDone func(err
 		onDone(cmd.Wait())
 	}()
 
-	return execProcess{cmd: cmd}, nil
+	return execProcess{cmd: cmd, done: done}, nil
 }
 
 type runner struct {
