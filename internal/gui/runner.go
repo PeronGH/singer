@@ -8,7 +8,10 @@ import (
 	"sync"
 )
 
-const maxLogLines = 1000
+const (
+	singBoxBinary = "sing-box"
+	maxLogLines   = 1000
+)
 
 type logKind int
 
@@ -49,7 +52,7 @@ func (p execProcess) Stop() error {
 }
 
 func startSingBoxProcess(configJSON []byte, onLine func(string), onDone func(error)) (processHandle, error) {
-	cmd := exec.Command("sing-box", "run", "-c", "stdin")
+	cmd := exec.Command(singBoxBinary, "run", "-c", "stdin")
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -88,6 +91,7 @@ type runner struct {
 	proc         processHandle
 	closed       bool
 	startProcess processStarter
+	lookPath     func(string) (string, error)
 
 	active      bool
 	stopping    bool
@@ -106,8 +110,14 @@ func newRunner(starter processStarter) *runner {
 	}
 	return &runner{
 		startProcess: starter,
+		lookPath:     exec.LookPath,
 		activeIndex:  -1,
 	}
+}
+
+func (r *runner) checkBinary() error {
+	_, err := r.lookPath(singBoxBinary)
+	return err
 }
 
 func (r *runner) connect(req runRequest, dispatch func(func()), onErr func(error)) {
