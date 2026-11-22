@@ -18,7 +18,7 @@ class SingerWidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
-        fun update(context: Context, snapshot: VpnSnapshot) {
+        internal fun update(context: Context, snapshot: VpnSnapshot) {
             val app = context.applicationContext
             val manager = AppWidgetManager.getInstance(app)
             val ids = manager.getAppWidgetIds(ComponentName(app, SingerWidgetProvider::class.java))
